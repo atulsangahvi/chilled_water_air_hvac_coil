@@ -1,0 +1,2 @@
+case_id,source,face_width_m,face_height_m,rows,Pt_mm,Pl_mm,tube_od_mm,tube_wall_mm,FPI,fin_thickness_mm,circuits,header_supply_od_mm,header_supply_wall_mm,header_return_od_mm,header_return_wall_mm,airflow_m3_h,air_in_DB_C,air_in_WB_C,air_in_RH_pct,water_in_C,water_out_C,water_flow_m3_h,total_capacity_kW,sensible_capacity_kW,air_dp_Pa,water_dp_kPa,notes
+VAL-001,,,,,,,,,,,,,,,,,,,,,,,,,,,
