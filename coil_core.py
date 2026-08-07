@@ -15,7 +15,7 @@ collars, return bends, header takeoffs and circuit arrangement.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, replace
 from typing import Dict, List, Tuple
 import math
 
@@ -48,6 +48,7 @@ class CoilGeometry:
     tube_k_W_mK: float = 380.0
     wave_amplitude_2x_m: float = 1.0e-3  # Pd, twice wave amplitude
     wave_half_period_m: float = 1.0e-3   # xf, half wavelength
+    fin_type: str = "Wavy + louvers"
 
 
 @dataclass
@@ -98,6 +99,27 @@ def air_state_from_db_rh(db_C: float, rh_pct: float, P: float = P_ATM) -> Dict[s
     rho_ha = (1.0 + W) / max(Vda, 1e-12)
     cp_da = 1006.0 + W * 1860.0
     return dict(T_C=db_C, RH_pct=rh_pct, W=W, h_J_kgda=h, Tdp_C=Tdp, Twb_C=Twb,
+                rho_ha=rho_ha, Vda_m3_kgda=Vda, cp_da=cp_da)
+
+
+def air_state_from_db_wb(db_C: float, wb_C: float, P: float = P_ATM) -> Dict[str, float]:
+    """Humid-air state from dry-bulb and thermodynamic wet-bulb temperature."""
+    _need_coolprop()
+    db_C = float(db_C)
+    wb_C = min(float(wb_C), db_C)
+    T = db_C + 273.15
+    B = wb_C + 273.15
+    W = HAPropsSI("W", "T", T, "P", P, "B", B)
+    h = HAPropsSI("H", "T", T, "P", P, "W", W)
+    RH = HAPropsSI("R", "T", T, "P", P, "W", W) * 100.0
+    Tdp = HAPropsSI("D", "T", T, "P", P, "W", W) - 273.15
+    try:
+        Vda = HAPropsSI("Vda", "T", T, "P", P, "W", W)
+    except Exception:
+        Vda = 287.055 * T * (1.0 + 1.6078 * W) / P
+    rho_ha = (1.0 + W) / max(Vda, 1e-12)
+    cp_da = 1006.0 + W * 1860.0
+    return dict(T_C=db_C, RH_pct=RH, W=W, h_J_kgda=h, Tdp_C=Tdp, Twb_C=wb_C,
                 rho_ha=rho_ha, Vda_m3_kgda=Vda, cp_da=cp_da)
 
 
@@ -173,8 +195,11 @@ def geometry_areas(g: CoilGeometry) -> Dict[str, float]:
     depth = Pl * g.rows
     A_face = g.face_width_m * g.face_height_m
 
-    # ACHP-style wavy-fin area enhancement. Pd is twice amplitude; xf is half-period.
-    sec_theta = math.sqrt(g.wave_half_period_m ** 2 + g.wave_amplitude_2x_m ** 2) / max(g.wave_half_period_m, 1e-12)
+    # Waviness changes developed fin area. Plain fin has no area-length enhancement.
+    if g.fin_type == "Plain fin":
+        sec_theta = 1.0
+    else:
+        sec_theta = math.sqrt(g.wave_half_period_m ** 2 + g.wave_amplitude_2x_m ** 2) / max(g.wave_half_period_m, 1e-12)
 
     # Minimum free-flow area: corrected orientation (fins counted along tube length, tubes per row by face height).
     A_c = (
@@ -228,6 +253,7 @@ def dry_air_transport(T_C: float, P: float = P_ATM) -> Tuple[float, float]:
 def airside_wang_wavy_louvered(
     geom: Dict[str, float], g: CoilGeometry, air_in: Dict[str, float], Vdot_m3_s: float,
     air_htc_multiplier: float = 1.0, air_dp_multiplier: float = 1.0,
+    bank_rows: int | None = None,
 ) -> Dict[str, float]:
     rho = air_in["rho_ha"]
     mdot_ha = rho * Vdot_m3_s
@@ -246,7 +272,7 @@ def airside_wang_wavy_louvered(
         16.06
         * Re_eff ** (-1.02 * pf_D - 0.256)
         * area_ratio ** (-0.601)
-        * g.rows ** (-0.069)
+        * max(int(bank_rows if bank_rows is not None else g.rows), 1) ** (-0.069)
         * pf_D ** 0.84
     )
     h_a = j * rho * u_max * cp_ha / max(Pr ** (2.0 / 3.0), 1e-12)
@@ -274,6 +300,94 @@ def airside_wang_wavy_louvered(
         "u_max_m_s": u_max,
         "mdot_ha_kg_s": mdot_ha,
     }
+
+
+def airside_wang_plain(
+    geom: Dict[str, float], g: CoilGeometry, air_in: Dict[str, float], Vdot_m3_s: float,
+    air_htc_multiplier: float = 1.0, air_dp_multiplier: float = 1.0,
+    bank_rows: int | None = None,
+) -> Dict[str, float]:
+    """Wang, Chi & Chang (2000) plain-fin j/f correlation.
+
+    This is the preferred path for continuous *plain* plate fins.  The expression is the
+    published correlation also used in the user's heat-pipe project.  It remains an
+    empirical correlation and should be calibrated against the actual fin die/collar.
+    """
+    rho = air_in["rho_ha"]
+    mdot_ha = rho * Vdot_m3_s
+    A_c = geom["free_flow_area_m2"]
+    Gmax = mdot_ha / max(A_c, 1e-12)
+    u_max = Gmax / max(rho, 1e-12)
+    mu, k = dry_air_transport(air_in["T_C"], P_ATM)
+    cp_ha = (1006.0 + air_in["W"] * 1860.0) / max(1.0 + air_in["W"], 1e-12)
+    Pr = cp_ha * mu / max(k, 1e-12)
+    Re = Gmax * g.tube_od_m / max(mu, 1e-12)
+    N = max(int(bank_rows if bank_rows is not None else g.rows), 1)
+
+    # Hydraulic diameter based on free volume / wetted air-side surface.
+    Dh = 4.0 * A_c * geom["depth_m"] / max(geom["A_air_total_m2"], 1e-12)
+    Dh = max(Dh, 1e-6)
+    Fp = geom["fin_pitch_m"]
+    Dc = g.tube_od_m
+    Pt = g.transverse_pitch_m
+    Pl = g.longitudinal_pitch_m
+    Re_eff = max(Re, 120.0)
+    lnRe = math.log(Re_eff)
+    FpDc = Fp / Dc
+    FpDh = Fp / Dh
+    FpPt = Fp / Pt
+    PtPl = Pt / Pl
+
+    P3 = -0.361 - 0.042 * N / lnRe + 0.158 * math.log(max(N * (FpDc ** 0.41), 1e-12))
+    P4 = -1.224 - 0.076 * (Pl / Dh) ** 1.42 / lnRe
+    P5 = -0.083 + 0.058 * N / lnRe
+    P6 = -5.735 + 1.21 * math.log(max(Re_eff / N, 1e-12))
+    j = 0.086 * Re_eff ** P3 * N ** P4 * FpDc ** P5 * FpDh ** P6 * FpPt ** (-0.93)
+
+    F1 = -0.764 + 0.739 * PtPl + 0.177 * FpDc - 0.00758 / N
+    F2 = -15.689 + 64.021 / lnRe
+    F3 = 1.696 - 15.695 / lnRe
+    f = 0.0267 * Re_eff ** F1 * PtPl ** F2 * FpDc ** F3
+    j = max(float(j), 1e-5)
+    f = max(float(f), 1e-5)
+
+    h_a = j * Gmax * cp_ha / max(Pr ** (2.0 / 3.0), 1e-12)
+    dp = f * (geom["A_air_total_m2"] / max(A_c, 1e-12)) * Gmax ** 2 / (2.0 * max(rho, 1e-12))
+    return {
+        "h_air_W_m2K": h_a * air_htc_multiplier,
+        "dp_air_dry_Pa": dp * air_dp_multiplier,
+        "j": j, "f_air": f, "Re_air": Re, "Pr_air": Pr,
+        "u_max_m_s": u_max, "mdot_ha_kg_s": mdot_ha,
+        "correlation": "Wang-Chi-Chang 2000 plain fin",
+        "correlation_note": "Published plain-fin j/f correlation",
+    }
+
+
+def airside_dispatch(
+    geom: Dict[str, float], g: CoilGeometry, air_in: Dict[str, float], Vdot_m3_s: float,
+    air_htc_multiplier: float = 1.0, air_dp_multiplier: float = 1.0,
+    bank_rows: int | None = None,
+) -> Dict[str, float]:
+    """Select an air-side model that matches the selected fin family.
+
+    * Plain fin: Wang, Chi & Chang (2000).
+    * Wavy + louvers: Wang-Tsai-Lu correlation as documented by ACHP.
+    * Wavy fin: transparent engineering baseline using the plain-fin Wang correlation on
+      the developed wavy area.  The 1999 Wang-Jang-Chiou paper confirms a dedicated wavy
+      correlation exists, but its full equation is not reproduced in the open references
+      bundled with this project; therefore no invented coefficients are used here.
+    """
+    if g.fin_type == "Plain fin":
+        return airside_wang_plain(geom, g, air_in, Vdot_m3_s, air_htc_multiplier, air_dp_multiplier, bank_rows)
+    if g.fin_type == "Wavy fin":
+        out = airside_wang_plain(geom, g, air_in, Vdot_m3_s, air_htc_multiplier, air_dp_multiplier, bank_rows)
+        out["correlation"] = "Wavy fin - Wang plain-fin baseline on developed wavy area"
+        out["correlation_note"] = "Calibration required; dedicated Wang-Jang-Chiou 1999 coefficients not hard-coded without a verified equation source"
+        return out
+    out = airside_wang_wavy_louvered(geom, g, air_in, Vdot_m3_s, air_htc_multiplier, air_dp_multiplier, bank_rows)
+    out["correlation"] = "Wang-Tsai-Lu wavy+louvered fin"
+    out["correlation_note"] = "As documented by ACHP"
+    return out
 
 
 def fin_efficiency_staggered(g: CoilGeometry, h_a: float, cs_cp: float = 1.0) -> float:
@@ -474,12 +588,15 @@ def thermal_performance(
     wet_air_dp_factor: float = 1.12,
     air_fouling_m2K_W: float = 0.0,
     water_fouling_m2K_W: float = 0.0,
+    air_bank_rows: int | None = None,
+    compute_hydraulics: bool = True,
 ) -> Dict[str, object]:
     geom = geometry_areas(g)
     ain = air_state_from_db_rh(air_in_cond.db_C, air_in_cond.rh_pct, air_in_cond.pressure_Pa)
     mdot_da = air_volume_flow_m3_s / ain["Vda_m3_kgda"]
-    aircorr = airside_wang_wavy_louvered(geom, g, ain, air_volume_flow_m3_s,
-                                         air_htc_multiplier, air_dp_multiplier)
+    aircorr = airside_dispatch(geom, g, ain, air_volume_flow_m3_s,
+                               air_htc_multiplier, air_dp_multiplier,
+                               bank_rows=(air_bank_rows if air_bank_rows is not None else g.rows))
 
     # Initial coolant properties at inlet; update cp with mean temperature after first solve.
     props = coolant_props(coolant_kind, glycol_pct, water_in_C, water_pressure_Pa)
@@ -637,10 +754,11 @@ def thermal_performance(
     mean_w = 0.5 * (water_in_C + Tout_w)
     props_final = coolant_props(coolant_kind, glycol_pct, mean_w, water_pressure_Pa)
     water_ht_final = water_side_htc(geom, hyd.circuits, hyd.water_mass_flow_kg_s, props_final, hyd.tube_roughness_m)
-    hydres = water_pressure_drop(geom, hyd, props_final, water_ht_final)
+    hydres = water_pressure_drop(geom, hyd, props_final, water_ht_final) if compute_hydraulics else {}
 
     return {
         "geometry": geom,
+        "fin_type": g.fin_type,
         "air_in": ain,
         "air_out": aout,
         "air_corr": aircorr,
@@ -660,8 +778,261 @@ def thermal_performance(
         "eta_fin_dry": eta_fin_dry,
         "eta_o_dry": eta_o_dry,
         "UA_dry_W_K": UA_dry,
+        "R_air_dry_K_W": R_outside_dry,
+        "R_water_plus_wall_K_W": R_inside,
+        "R_wall_K_W": R_wall,
+        "R_air_fouling_K_W": R_fo,
+        "R_water_fouling_K_W": R_fi,
         "mdot_da_kg_s": mdot_da,
     }
+
+
+def segmented_thermal_performance(
+    g: CoilGeometry,
+    air_in_cond: AirCondition,
+    air_volume_flow_m3_s: float,
+    coolant_kind: str,
+    glycol_pct: float,
+    water_in_C: float,
+    water_pressure_Pa: float,
+    hyd: HydraulicInputs,
+    water_row_progression: str = "Water enters air-leaving side (cross-counterflow tendency)",
+    air_htc_multiplier: float = 1.0,
+    air_dp_multiplier: float = 1.0,
+    wet_air_dp_factor: float = 1.12,
+    air_fouling_m2K_W: float = 0.0,
+    water_fouling_m2K_W: float = 0.0,
+    max_iter: int = 60,
+    tol_K: float = 2e-4,
+) -> Dict[str, object]:
+    """Equivalent row-bank chilled-water march with *physical cross-flow* at every row.
+
+    Air always crosses the tube axes approximately at 90 degrees.  The user option only
+    specifies which side of the coil depth receives the cold-water connection:
+
+    - water enters the air-leaving side -> cross-counterflow *row progression*;
+    - water enters the air-entering side -> cross-parallelflow *row progression*.
+
+    The local row heat exchanger is therefore never modeled as a physical parallel-flow
+    exchanger.  Dry-row effectiveness uses the cross-flow relation in ``thermal_performance``.
+    The reverse row progression requires an iterative water-temperature profile because air
+    and water boundary conditions are known at opposite ends of the bank.
+    """
+    if hyd.circuits > max(int(math.floor(g.face_height_m / g.transverse_pitch_m)), 1):
+        # More circuits than tubes in a row is not physically routeable for the common
+        # one-tube-per-circuit-per-row serpentine pattern.
+        pass
+
+    full_ref = thermal_performance(
+        g, air_in_cond, air_volume_flow_m3_s, coolant_kind, glycol_pct, water_in_C,
+        water_pressure_Pa, hyd, air_htc_multiplier, air_dp_multiplier, wet_air_dp_factor,
+        air_fouling_m2K_W, water_fouling_m2K_W,
+    )
+    mdot_da_fixed = float(full_ref["mdot_da_kg_s"])
+    geom_full = full_ref["geometry"]
+    nrows = int(g.rows)
+    row_g = replace(g, rows=1)
+    reverse = water_row_progression.startswith("Water enters air-leaving")
+
+    def run_profile(boundaries: list[float] | None = None):
+        air_cond = AirCondition(air_in_cond.db_C, air_in_cond.rh_pct, air_in_cond.pressure_Pa)
+        logs = []
+        air_dp_sum = 0.0
+        q_sum = qs_sum = ql_sum = 0.0
+        if reverse:
+            assert boundaries is not None
+            predicted = list(boundaries)
+            predicted[-1] = water_in_C
+        else:
+            predicted = [water_in_C] + [water_in_C] * nrows
+            tw_current = water_in_C
+
+        last_rr = None
+        for i in range(nrows):
+            if reverse:
+                tw_row_in = float(boundaries[i + 1])
+            else:
+                tw_row_in = float(tw_current)
+
+            _row_ain = air_state_from_db_rh(air_cond.db_C, air_cond.rh_pct, air_cond.pressure_Pa)
+            row_Vdot = mdot_da_fixed * _row_ain["Vda_m3_kgda"]
+            rr = thermal_performance(
+                row_g, air_cond, row_Vdot, coolant_kind, glycol_pct,
+                tw_row_in, water_pressure_Pa, hyd, air_htc_multiplier,
+                air_dp_multiplier, wet_air_dp_factor, air_fouling_m2K_W,
+                water_fouling_m2K_W, air_bank_rows=nrows,
+            )
+            last_rr = rr
+            tw_row_out = float(rr["water_out_C"])
+            if reverse:
+                predicted[i] = tw_row_out
+            else:
+                predicted[i + 1] = tw_row_out
+                tw_current = tw_row_out
+
+            ain_r = rr["air_in"]
+            aout_r = rr["air_out"]
+            C_air_r = rr["mdot_da_kg_s"] * ain_r["cp_da"]
+            C_w_r = hyd.water_mass_flow_kg_s * rr["water_props"]["cp"]
+            Cmin_r, Cmax_r = min(C_air_r, C_w_r), max(C_air_r, C_w_r)
+            Cr_r = Cmin_r / max(Cmax_r, 1e-12)
+            NTU_r = rr["UA_dry_W_K"] / max(Cmin_r, 1e-12)
+            eps_r = crossflow_effectiveness(NTU_r, Cr_r, Cmin_is_water=(C_w_r <= C_air_r))
+            logs.append({
+                "Row_air_sequence": i + 1,
+                "Air_in_DB_C": ain_r["T_C"],
+                "Air_out_DB_C": aout_r["T_C"],
+                "Air_in_WB_C": ain_r["Twb_C"],
+                "Air_out_WB_C": aout_r["Twb_C"],
+                "Air_in_RH_pct": ain_r["RH_pct"],
+                "Air_out_RH_pct": aout_r["RH_pct"],
+                "Air_in_W_g_kgda": 1000.0 * ain_r["W"],
+                "Air_out_W_g_kgda": 1000.0 * aout_r["W"],
+                "Water_in_C": tw_row_in,
+                "Water_out_C": tw_row_out,
+                "Q_total_kW": rr["Q_total_kW"],
+                "Q_sensible_kW": rr["Q_sensible_kW"],
+                "Q_latent_kW": rr["Q_latent_kW"],
+                "Wet_fraction_pct": 100.0 * rr["wet_fraction"],
+                "Surface_mode": rr["surface_mode"],
+                "C_air_kW_K": C_air_r / 1000.0,
+                "C_water_kW_K": C_w_r / 1000.0,
+                "Cr": Cr_r,
+                "NTU_dry": NTU_r,
+                "Effectiveness_dry_crossflow": eps_r,
+                "Re_air": rr["air_corr"]["Re_air"],
+                "Pr_air": rr["air_corr"]["Pr_air"],
+                "Re_water": rr["water_ht"]["Re_water"],
+                "Pr_water": rr["water_ht"]["Pr_water"],
+            })
+            q_sum += rr["Q_total_kW"]
+            qs_sum += rr["Q_sensible_kW"]
+            ql_sum += rr["Q_latent_kW"]
+            air_dp_sum += rr["air_dp_Pa"]
+            air_cond = AirCondition(aout_r["T_C"], aout_r["RH_pct"], air_in_cond.pressure_Pa)
+        return predicted, logs, last_rr, q_sum, qs_sum, ql_sum, air_dp_sum
+
+    converged = True
+    iterations = 1
+    if reverse:
+        # Seed from the full-bank energy balance: water is coldest at the air-leaving side
+        # and warmest at the air-entering side.
+        tw_out_seed = max(water_in_C, float(full_ref["water_out_C"]))
+        boundaries = list(np.linspace(tw_out_seed, water_in_C, nrows + 1))
+        converged = False
+        for it in range(1, max_iter + 1):
+            predicted, logs, last_rr, q_sum, qs_sum, ql_sum, air_dp_sum = run_profile(boundaries)
+            delta = max(abs(predicted[j] - boundaries[j]) for j in range(nrows))
+            # Under-relax to stabilize wet/dry row-state changes near dew point.
+            boundaries = [0.55 * boundaries[j] + 0.45 * predicted[j] for j in range(nrows)] + [water_in_C]
+            iterations = it
+            if delta < tol_K:
+                converged = True
+                break
+        # One final pass using the converged profile for the reported rows.
+        predicted, logs, last_rr, q_sum, qs_sum, ql_sum, air_dp_sum = run_profile(boundaries)
+        water_out_C = float(predicted[0])
+    else:
+        predicted, logs, last_rr, q_sum, qs_sum, ql_sum, air_dp_sum = run_profile(None)
+        water_out_C = float(predicted[-1])
+
+    if last_rr is None:
+        raise RuntimeError("Row marching returned no rows.")
+    aout = last_rr["air_out"]
+    ain = full_ref["air_in"]
+    mdot_da = full_ref["mdot_da_kg_s"]
+    mean_w = 0.5 * (water_in_C + water_out_C)
+    props_final = coolant_props(coolant_kind, glycol_pct, mean_w, water_pressure_Pa)
+    water_ht_final = water_side_htc(geom_full, hyd.circuits, hyd.water_mass_flow_kg_s, props_final, hyd.tube_roughness_m)
+    hydres = water_pressure_drop(geom_full, hyd, props_final, water_ht_final)
+
+    wet_fr = float(np.mean([r["Wet_fraction_pct"] for r in logs]) / 100.0)
+    modes = {r["Surface_mode"] for r in logs}
+    if modes == {"Dry"}:
+        surface_state = "Dry by row"
+    elif modes == {"Fully wet"}:
+        surface_state = "Fully wet by row"
+    else:
+        surface_state = "Mixed / partially wet by row"
+
+    C_air = mdot_da * ain["cp_da"]
+    C_w = hyd.water_mass_flow_kg_s * props_final["cp"]
+    Cmin, Cmax = min(C_air, C_w), max(C_air, C_w)
+    Cr = Cmin / max(Cmax, 1e-12)
+    NTU = full_ref["UA_dry_W_K"] / max(Cmin, 1e-12)
+    eps_dry = crossflow_effectiveness(NTU, Cr, Cmin_is_water=(C_w <= C_air))
+    eps_T = (ain["T_C"] - aout["T_C"]) / max(ain["T_C"] - water_in_C, 1e-12)
+    hsat_wi = saturation_enthalpy(water_in_C, air_in_cond.pressure_Pa)
+    eps_h = (ain["h_J_kgda"] - aout["h_J_kgda"]) / max(ain["h_J_kgda"] - hsat_wi, 1e-12)
+
+    Rair = max(full_ref.get("R_air_dry_K_W", 0.0), 0.0)
+    Rwall = max(full_ref.get("R_wall_K_W", 0.0), 0.0)
+    Rinside = max(full_ref.get("R_water_plus_wall_K_W", 0.0), 0.0)
+    Rwater = max(Rinside - Rwall, 0.0)
+    Rtot = max(Rair + Rwater + Rwall, 1e-12)
+    resistance_pct = {
+        "air": 100.0 * Rair / Rtot,
+        "water": 100.0 * Rwater / Rtot,
+        "wall": 100.0 * Rwall / Rtot,
+    }
+    capacity_limiting = "Coolant side" if C_w < C_air else "Air side"
+    resistance_limiting = max(resistance_pct, key=resistance_pct.get).capitalize() + " side"
+
+    condensate = mdot_da * max(ain["W"] - aout["W"], 0.0) * 3600.0
+    SHR = min(max(qs_sum / max(q_sum, 1e-12), 0.0), 1.0)
+    face_velocity = air_volume_flow_m3_s / max(geom_full["face_area_m2"], 1e-12)
+
+    return {
+        "geometry": geom_full,
+        "fin_type": g.fin_type,
+        "air_in": ain,
+        "air_out": aout,
+        "air_corr": full_ref["air_corr"],
+        "water_props": props_final,
+        "water_ht": water_ht_final,
+        "hydraulics": hydres,
+        "Q_total_kW": q_sum,
+        "Q_sensible_kW": qs_sum,
+        "Q_latent_kW": max(ql_sum, 0.0),
+        "SHR": SHR,
+        "water_out_C": water_out_C,
+        "condensate_kg_h": condensate,
+        "wet_fraction": wet_fr,
+        "surface_mode": surface_state,
+        "air_dp_Pa": air_dp_sum,
+        "UA_dry_W_K": full_ref["UA_dry_W_K"],
+        "mdot_da_kg_s": mdot_da,
+        "row_table": pd.DataFrame(logs),
+        "row_march_converged": converged,
+        "row_march_iterations": iterations,
+        "physical_flow_geometry": "Cross-flow: air is perpendicular to tube/coolant flow",
+        "water_row_progression": water_row_progression,
+        "face_velocity_m_s": face_velocity,
+        "max_air_velocity_m_s": full_ref["air_corr"]["u_max_m_s"],
+        "C_air_kW_K": C_air / 1000.0,
+        "C_coolant_kW_K": C_w / 1000.0,
+        "Cmin_kW_K": Cmin / 1000.0,
+        "Cmax_kW_K": Cmax / 1000.0,
+        "Cr": Cr,
+        "NTU_dry": NTU,
+        "effectiveness_dry_crossflow": eps_dry,
+        "wet_enthalpy_effectiveness": min(max(eps_h, 0.0), 1.5),
+        "air_temperature_effectiveness": min(max(eps_T, 0.0), 1.5),
+        "capacity_rate_limiting_side": capacity_limiting,
+        "resistance_limiting_side": resistance_limiting,
+        "resistance_split_pct": resistance_pct,
+    }
+
+
+def target_load_db_wb(air_in: AirCondition, air_out_db_C: float, air_out_wb_C: float, Vdot_m3_s: float) -> Dict[str, float]:
+    ain = air_state_from_db_rh(air_in.db_C, air_in.rh_pct, air_in.pressure_Pa)
+    aout = air_state_from_db_wb(air_out_db_C, air_out_wb_C, air_in.pressure_Pa)
+    mdot_da = air_volume_flow_m3_s / ain["Vda_m3_kgda"]
+    Q = mdot_da * (ain["h_J_kgda"] - aout["h_J_kgda"])
+    Qs = mdot_da * ain["cp_da"] * (air_in.db_C - air_out_db_C)
+    return {"Q_required_kW": Q / 1000.0, "Q_sensible_required_kW": Qs / 1000.0,
+            "SHR_required": Qs / max(Q, 1e-12), "mdot_da_kg_s": mdot_da,
+            "target_air": aout}
 
 
 def target_load(air_in: AirCondition, air_out_db_C: float, air_out_rh_pct: float, Vdot_m3_s: float) -> Dict[str, float]:
@@ -682,8 +1053,13 @@ def warnings_for_result(result: Dict[str, object]) -> List[str]:
     ac = result["air_corr"]
     if geom["free_area_ratio"] < 0.30:
         w.append("Low free-flow area ratio; re-check fin/tube geometry and expect high air pressure drop.")
-    if ac["Re_air"] < 300 or ac["Re_air"] > 8000:
-        w.append("Air Reynolds number is outside the approximate 300–8000 range reported for the Wang wavy/louvered data set; correlation extrapolation is occurring.")
+    if result.get("fin_type") == "Plain fin":
+        if ac["Re_air"] < 300 or ac["Re_air"] > 20000:
+            w.append("Air Reynolds number is outside the approximate 300-20000 range used for the Wang plain-fin correlation; extrapolation is occurring.")
+    elif ac["Re_air"] < 300 or ac["Re_air"] > 8000:
+        w.append("Air Reynolds number is outside the approximate range used for the current wavy/louvered air-side model; extrapolation is occurring.")
+    if result.get("fin_type") == "Wavy fin":
+        w.append("Wavy-fin mode currently uses a transparent plain-fin Wang baseline on developed wavy area. Calibrate h and dP against the actual wavy fin die before production use.")
     if wh["Re_water"] < 3000:
         w.append("Water-side Reynolds number is below 3000; turbulent Gnielinski performance is not fully established and heat transfer may be transition/laminar.")
     if wh["velocity_m_s"] < 0.45:
@@ -693,599 +1069,12 @@ def warnings_for_result(result: Dict[str, object]) -> List[str]:
     if hyd["header_supply_velocity_m_s"] > 2.5 or hyd["header_return_velocity_m_s"] > 2.5:
         w.append("Header velocity exceeds 2.5 m/s; consider a larger header ID and check noise/erosion criteria.")
     if hyd["header_path_spread_kPa"] > max(0.15 * hyd["dp_total_avg_kPa"], 2.0):
-        w.append("Large calculated circuit-path pressure spread: equal-flow assumption may be poor. Consider opposite-end headers, balancing, or a hydraulic network calculation.")
+        if hyd.get("model", "").startswith("Explicit routed-circuit"):
+            w.append("Large residual circuit-path pressure spread remains in the explicit routed-circuit network; review circuit pass balance, bend spans, branch positions and header sizing.")
+        else:
+            w.append("Large calculated circuit-path pressure spread: equal-flow assumption may be poor. Define the physical circuit map in the Circuiting tab or revise headers/balancing.")
+    if hyd.get("flow_imbalance_pct_max", 0.0) > 10.0:
+        w.append(f"Explicit circuit-flow maldistribution is high ({hyd['flow_imbalance_pct_max']:.1f}% maximum deviation from equal flow). Review circuit lengths and header branch locations.")
     if result["air_dp_Pa"] > 300:
         w.append("Air-side coil pressure drop is high (>300 Pa); check face velocity, FPI, rows and wet correction against fan static allowance.")
-    return w
-
-# =============================================================================
-# v2 segmented / row-marching extensions
-# =============================================================================
-# Keep the first-generation whole-coil solver available for comparison/validation.
-thermal_performance_whole_coil_v1 = thermal_performance
-
-
-def air_state_from_db_wb(db_C: float, wb_C: float, P: float = P_ATM) -> Dict[str, float]:
-    """Humid-air state from dry-bulb and wet-bulb temperature."""
-    _need_coolprop()
-    if wb_C > db_C:
-        raise ValueError("Wet-bulb temperature cannot exceed dry-bulb temperature.")
-    T = db_C + 273.15
-    B = wb_C + 273.15
-    W = HAPropsSI("W", "T", T, "P", P, "B", B)
-    return air_state_from_T_W(db_C, W, P)
-
-
-def _air_state_full_from_T_W(db_C: float, W: float, P: float = P_ATM) -> Dict[str, float]:
-    """air_state_from_T_W plus density/specific volume used by segmented calculations."""
-    s = air_state_from_T_W(db_C, W, P)
-    T = db_C + 273.15
-    try:
-        Vda = HAPropsSI("Vda", "T", T, "P", P, "W", max(W, 1e-9))
-    except Exception:
-        Vda = 287.055 * T * (1.0 + 1.6078 * W) / P
-    s["Vda_m3_kgda"] = Vda
-    s["rho_ha"] = (1.0 + W) / max(Vda, 1e-12)
-    return s
-
-
-def target_load_from_condition(
-    air_in: AirCondition,
-    Vdot_m3_s: float,
-    outlet_db_C: float,
-    outlet_value: float,
-    outlet_mode: str = "DB + RH",
-) -> Dict[str, object]:
-    """Build a target from either DB+RH or DB+WB leaving-air conditions."""
-    ain = air_state_from_db_rh(air_in.db_C, air_in.rh_pct, air_in.pressure_Pa)
-    if outlet_mode == "DB + WB":
-        aout = air_state_from_db_wb(outlet_db_C, outlet_value, air_in.pressure_Pa)
-    else:
-        aout = air_state_from_db_rh(outlet_db_C, outlet_value, air_in.pressure_Pa)
-    mdot_da = Vdot_m3_s / ain["Vda_m3_kgda"]
-    Q = mdot_da * (ain["h_J_kgda"] - aout["h_J_kgda"])
-    Qs = mdot_da * ain["cp_da"] * (air_in.db_C - outlet_db_C)
-    return {
-        "mode": "Leaving air condition",
-        "Q_required_kW": Q / 1000.0,
-        "Q_sensible_required_kW": Qs / 1000.0,
-        "SHR_required": Qs / max(Q, 1e-12),
-        "mdot_da_kg_s": mdot_da,
-        "air_target": aout,
-        "target_db_C": outlet_db_C,
-        "target_W": aout["W"],
-        "target_RH_pct": aout["RH_pct"],
-        "target_WB_C": aout["Twb_C"],
-        "outlet_mode": outlet_mode,
-    }
-
-
-def target_capacity(kW: float) -> Dict[str, object]:
-    return {"mode": "Cooling capacity", "Q_required_kW": float(kW)}
-
-
-def target_is_met(result: Dict[str, object], target: Dict[str, object], temp_tol_K: float = 0.20) -> bool:
-    if target.get("mode") == "Leaving air condition":
-        t_ok = result["air_out"]["T_C"] <= float(target["target_db_C"]) + temp_tol_K
-        # Humidity ratio is the physically robust moisture target; RH alone can rise as air cools.
-        w_ok = result["air_out"]["W"] <= float(target["target_W"]) + 2.0e-5
-        q_ok = result["Q_total_kW"] >= 0.99 * float(target["Q_required_kW"])
-        return bool(t_ok and w_ok and q_ok)
-    return bool(result["Q_total_kW"] >= float(target.get("Q_required_kW", 0.0)))
-
-
-def _solve_saturation_temperature_from_h(h_target: float, P: float, lo_C: float, hi_C: float) -> float:
-    lo = min(lo_C, hi_C)
-    hi = max(lo_C, hi_C)
-    h_lo = saturation_enthalpy(lo, P)
-    h_hi = saturation_enthalpy(hi, P)
-    if h_target <= h_lo:
-        return lo
-    if h_target >= h_hi:
-        return hi
-    for _ in range(60):
-        mid = 0.5 * (lo + hi)
-        if saturation_enthalpy(mid, P) < h_target:
-            lo = mid
-        else:
-            hi = mid
-    return 0.5 * (lo + hi)
-
-
-def _row_segment(
-    g: CoilGeometry,
-    geom: Dict[str, float],
-    air_in: Dict[str, float],
-    water_in_C: float,
-    mdot_da: float,
-    coolant_kind: str,
-    glycol_pct: float,
-    water_pressure_Pa: float,
-    hyd: HydraulicInputs,
-    h_air: float,
-    air_fouling_m2K_W: float,
-    water_fouling_m2K_W: float,
-) -> Dict[str, object]:
-    """Solve one bank/row using a dry/wet enthalpy-potential segment model."""
-    nr = max(g.rows, 1)
-    A_a = geom["A_air_total_m2"] / nr
-    A_i = geom["A_i_total_m2"] / nr
-    Ltot = geom["L_total_tube_m"] / nr
-    cp_air = air_in["cp_da"]
-    C_air = mdot_da * cp_air
-
-    # A few inner iterations update fluid properties with row mean temperature.
-    Tw_out_guess = water_in_C + 0.25
-    last = None
-    for _ in range(12):
-        Tmean_w = 0.5 * (water_in_C + Tw_out_guess)
-        props = coolant_props(coolant_kind, glycol_pct, Tmean_w, water_pressure_Pa)
-        wh = water_side_htc(geom, hyd.circuits, hyd.water_mass_flow_kg_s, props, hyd.tube_roughness_m)
-        C_w = hyd.water_mass_flow_kg_s * props["cp"]
-
-        eta_fin_dry = fin_efficiency_staggered(g, h_air, 1.0)
-        eta_o_dry = 1.0 - (geom["A_fin_m2"] / max(geom["A_air_total_m2"], 1e-12)) * (1.0 - eta_fin_dry)
-        UA_o_dry_raw = eta_o_dry * h_air * A_a
-        UA_i_raw = wh["h_water_W_m2K"] * A_i
-        R_wall = math.log(g.tube_od_m / geom["Di_m"]) / (2.0 * math.pi * g.tube_k_W_mK * Ltot)
-        R_fo = air_fouling_m2K_W / max(A_a, 1e-12)
-        R_fi = water_fouling_m2K_W / max(A_i, 1e-12)
-        UA_i_eff = 1.0 / (1.0 / max(UA_i_raw, 1e-12) + R_wall + R_fi)
-        UA_o_eff_dry = 1.0 / (1.0 / max(UA_o_dry_raw, 1e-12) + R_fo)
-        UA_dry = 1.0 / (1.0 / max(UA_i_eff, 1e-12) + 1.0 / max(UA_o_eff_dry, 1e-12))
-
-        Cmin = min(C_air, C_w)
-        Cmax = max(C_air, C_w)
-        Cr = Cmin / max(Cmax, 1e-12)
-        NTU = UA_dry / max(Cmin, 1e-12)
-        eps_dry = crossflow_effectiveness(NTU, Cr, Cmin_is_water=(C_w <= C_air))
-        Q_dry = max(0.0, eps_dry * Cmin * (air_in["T_C"] - water_in_C))
-        Ta_dry = air_in["T_C"] - Q_dry / max(C_air, 1e-12)
-        Tw_dry = water_in_C + Q_dry / max(C_w, 1e-12)
-
-        Tsurf_out = (UA_o_eff_dry * Ta_dry + UA_i_eff * water_in_C) / max(UA_o_eff_dry + UA_i_eff, 1e-12)
-        Tsurf_in = (UA_o_eff_dry * air_in["T_C"] + UA_i_eff * Tw_dry) / max(UA_o_eff_dry + UA_i_eff, 1e-12)
-
-        if Tsurf_out >= air_in["Tdp_C"]:
-            f_dry = 1.0
-            wet_fraction = 0.0
-            mode = "Dry"
-            Q = Q_dry
-            Qs = Q_dry
-            Ta_out = Ta_dry
-            Wout = air_in["W"]
-            Tw_out = Tw_dry
-            eps_wet = 0.0
-            eta_fin_wet = eta_fin_dry
-            UA_o_eff_wet = UA_o_eff_dry
-        else:
-            mode = "Fully wet" if Tsurf_in <= air_in["Tdp_C"] else "Partially wet"
-            cs = saturation_cp(Tmean_w, air_in.get("pressure_Pa", P_ATM))
-            cs_cp = max(cs / max(cp_air, 1e-12), 1.0)
-            eta_fin_wet = fin_efficiency_staggered(g, h_air, cs_cp)
-            eta_o_wet = 1.0 - (geom["A_fin_m2"] / max(geom["A_air_total_m2"], 1e-12)) * (1.0 - eta_fin_wet)
-            UA_o_wet_raw = eta_o_wet * h_air * A_a
-            UA_o_eff_wet = 1.0 / (1.0 / max(UA_o_wet_raw, 1e-12) + R_fo)
-
-            Ntu_i = UA_i_eff / max(C_w, 1e-12)
-            Ntu_o = UA_o_eff_wet / max(C_air, 1e-12)
-            Cw_star = C_w / max(cs, 1e-12)  # equivalent dry-air mass capacity rate [kg_da/s]
-            m_star = min(Cw_star, mdot_da) / max(Cw_star, mdot_da, 1e-12)
-            mdot_min_eq = min(Cw_star, mdot_da)
-            if C_w > cs * mdot_da:
-                Ntu_wet = Ntu_o / max(1.0 + m_star * (Ntu_o / max(Ntu_i, 1e-12)), 1e-12)
-            else:
-                Ntu_wet = Ntu_i / max(1.0 + m_star * (Ntu_i / max(Ntu_o, 1e-12)), 1e-12)
-            if abs(1.0 - m_star) < 1e-7:
-                eps_wet = Ntu_wet / (1.0 + Ntu_wet)
-            else:
-                ex = math.exp(-Ntu_wet * (1.0 - m_star))
-                eps_wet = (1.0 - ex) / max(1.0 - m_star * ex, 1e-12)
-
-            hsat_wi = saturation_enthalpy(water_in_C, air_in.get("pressure_Pa", P_ATM))
-            Q_full_wet = max(0.0, eps_wet * mdot_min_eq * (air_in["h_J_kgda"] - hsat_wi))
-
-            if mode == "Partially wet":
-                T_ac = air_in["Tdp_C"] + UA_i_eff / max(UA_o_eff_dry, 1e-12) * (air_in["Tdp_C"] - water_in_C)
-                eps_part = (air_in["T_C"] - T_ac) / max(air_in["T_C"] - water_in_C, 1e-12)
-                eps_part = min(max(eps_part, 0.0), 0.999999)
-                Ntu_dry_air = UA_dry / max(C_air, 1e-12)
-                f_dry = min(max(-math.log(max(1.0 - eps_part, 1e-12)) / max(Ntu_dry_air, 1e-12), 0.0), 1.0)
-            else:
-                f_dry = 0.0
-            wet_fraction = 1.0 - f_dry
-
-            Q_dry_part = f_dry * Q_dry
-            Q_wet = wet_fraction * Q_full_wet
-            Q = Q_dry_part + Q_wet
-            h_after_dry = air_in["h_J_kgda"] - Q_dry_part / max(mdot_da, 1e-12)
-            T_after_dry = air_in["T_C"] - Q_dry_part / max(C_air, 1e-12)
-            hout = air_in["h_J_kgda"] - Q / max(mdot_da, 1e-12)
-            Tw_out = water_in_C + Q / max(C_w, 1e-12)
-
-            if wet_fraction > 1e-7 and Ntu_o > 1e-10:
-                denom = 1.0 - math.exp(-wet_fraction * Ntu_o)
-                h_surf_eff = h_after_dry + (hout - h_after_dry) / max(denom, 1e-12)
-                T_surf_eff = _solve_saturation_temperature_from_h(
-                    h_surf_eff, air_in.get("pressure_Pa", P_ATM), water_in_C - 3.0, max(T_after_dry, water_in_C + 0.01)
-                )
-                Ta_out = T_surf_eff + (T_after_dry - T_surf_eff) * math.exp(-wet_fraction * Ntu_o)
-            else:
-                Ta_out = T_after_dry
-            try:
-                Wout = W_from_T_h(Ta_out, hout, air_in.get("pressure_Pa", P_ATM))
-            except Exception:
-                Wout = air_in["W"]
-            Wsat = HAPropsSI("W", "T", Ta_out + 273.15, "P", air_in.get("pressure_Pa", P_ATM), "R", 0.9999)
-            Wout = min(air_in["W"], Wsat, max(Wout, 1e-9))
-            Qs = mdot_da * cp_air * max(air_in["T_C"] - Ta_out, 0.0)
-
-        if abs(Tw_out - Tw_out_guess) < 2e-5:
-            last = (props, wh, C_w, eta_fin_dry, eta_fin_wet, UA_i_eff, UA_o_eff_dry, UA_o_eff_wet,
-                    UA_dry, Cmin, Cmax, Cr, NTU, eps_dry, eps_wet, f_dry, wet_fraction, mode, Q, Qs, Ta_out, Wout, Tw_out)
-            break
-        Tw_out_guess = 0.5 * Tw_out_guess + 0.5 * Tw_out
-        last = (props, wh, C_w, eta_fin_dry, eta_fin_wet, UA_i_eff, UA_o_eff_dry, UA_o_eff_wet,
-                UA_dry, Cmin, Cmax, Cr, NTU, eps_dry, eps_wet, f_dry, wet_fraction, mode, Q, Qs, Ta_out, Wout, Tw_out)
-
-    (props, wh, C_w, eta_fin_dry, eta_fin_wet, UA_i_eff, UA_o_eff_dry, UA_o_eff_wet,
-     UA_dry, Cmin, Cmax, Cr, NTU, eps_dry, eps_wet, f_dry, wet_fraction, mode, Q, Qs,
-     Ta_out, Wout, Tw_out) = last
-    aout = _air_state_full_from_T_W(Ta_out, Wout, air_in.get("pressure_Pa", P_ATM))
-    return {
-        "air_out": aout,
-        "water_out_C": Tw_out,
-        "Q_W": Q,
-        "Q_sensible_W": min(Qs, Q),
-        "Q_latent_W": max(Q - Qs, 0.0),
-        "wet_fraction": wet_fraction,
-        "surface_mode": mode,
-        "C_air_W_K": C_air,
-        "C_water_W_K": C_w,
-        "Cmin_W_K": Cmin,
-        "Cmax_W_K": Cmax,
-        "Cr": Cr,
-        "NTU_dry": NTU,
-        "effectiveness_dry": eps_dry,
-        "effectiveness_wet_enthalpy": eps_wet,
-        "UA_dry_W_K": UA_dry,
-        "h_water_W_m2K": wh["h_water_W_m2K"],
-        "Re_water": wh["Re_water"],
-        "Pr_water": wh["Pr_water"],
-        "water_velocity_m_s": wh["velocity_m_s"],
-        "eta_fin_dry": eta_fin_dry,
-        "eta_fin_wet": eta_fin_wet,
-    }
-
-
-def thermal_performance(
-    g: CoilGeometry,
-    air_in_cond: AirCondition,
-    air_volume_flow_m3_s: float,
-    coolant_kind: str,
-    glycol_pct: float,
-    water_in_C: float,
-    water_pressure_Pa: float,
-    hyd: HydraulicInputs,
-    air_htc_multiplier: float = 1.0,
-    air_dp_multiplier: float = 1.0,
-    wet_air_dp_factor: float = 1.12,
-    air_fouling_m2K_W: float = 0.0,
-    water_fouling_m2K_W: float = 0.0,
-    water_thermal_arrangement: str = "Counterflow / water enters air-leaving side",
-) -> Dict[str, object]:
-    """Segmented chilled-water coil model with row-by-row air and coolant marching.
-
-    The row model is an equivalent bank model. Exact tube-by-tube water temperatures require the
-    physical circuit routing map (which tube connects to which return bend/header branch).
-    """
-    geom = geometry_areas(g)
-    if hyd.circuits > geom["n_tubes_total"]:
-        raise ValueError(f"Parallel circuits ({hyd.circuits}) cannot exceed total tubes ({geom['n_tubes_total']}).")
-    ain = air_state_from_db_rh(air_in_cond.db_C, air_in_cond.rh_pct, air_in_cond.pressure_Pa)
-    ain["pressure_Pa"] = air_in_cond.pressure_Pa
-    mdot_da = air_volume_flow_m3_s / ain["Vda_m3_kgda"]
-    aircorr = airside_wang_wavy_louvered(geom, g, ain, air_volume_flow_m3_s,
-                                         air_htc_multiplier, air_dp_multiplier)
-    h_air = aircorr["h_air_W_m2K"]
-
-    # Solve the coupled row temperatures. Counterflow requires fixed-point iteration because
-    # air is marched 1->N while water is marched N->1.
-    N = int(g.rows)
-    counter = water_thermal_arrangement.startswith("Counter")
-    tw_in_rows = np.full(N, float(water_in_C))
-    final_rows = None
-    converged = False
-    iterations = 0
-    for it in range(80):
-        iterations = it + 1
-        air_state = dict(ain)
-        rows_out = []
-        tw_out_rows = np.zeros(N)
-        for i in range(N):
-            seg = _row_segment(g, geom, air_state, float(tw_in_rows[i]), mdot_da,
-                               coolant_kind, glycol_pct, water_pressure_Pa, hyd, h_air,
-                               air_fouling_m2K_W, water_fouling_m2K_W)
-            tw_out_rows[i] = seg["water_out_C"]
-            rows_out.append((dict(air_state), float(tw_in_rows[i]), seg))
-            air_state = dict(seg["air_out"])
-            air_state["pressure_Pa"] = air_in_cond.pressure_Pa
-
-        new_tw = np.array(tw_in_rows, dtype=float)
-        if counter:
-            new_tw[N - 1] = water_in_C
-            for i in range(N - 2, -1, -1):
-                new_tw[i] = tw_out_rows[i + 1]
-        else:
-            new_tw[0] = water_in_C
-            for i in range(1, N):
-                new_tw[i] = tw_out_rows[i - 1]
-        err = float(np.max(np.abs(new_tw - tw_in_rows)))
-        tw_in_rows = 0.25 * tw_in_rows + 0.75 * new_tw
-        final_rows = rows_out
-        if err < 2.0e-4:
-            converged = True
-            # One final evaluation on converged row inlet temperatures.
-            air_state = dict(ain)
-            final_rows = []
-            for i in range(N):
-                seg = _row_segment(g, geom, air_state, float(tw_in_rows[i]), mdot_da,
-                                   coolant_kind, glycol_pct, water_pressure_Pa, hyd, h_air,
-                                   air_fouling_m2K_W, water_fouling_m2K_W)
-                final_rows.append((dict(air_state), float(tw_in_rows[i]), seg))
-                air_state = dict(seg["air_out"])
-                air_state["pressure_Pa"] = air_in_cond.pressure_Pa
-            break
-
-    row_records = []
-    Q_total = Q_sensible = Q_latent = 0.0
-    for i, (ai, twi, seg) in enumerate(final_rows, start=1):
-        ao = seg["air_out"]
-        Q_total += seg["Q_W"]
-        Q_sensible += seg["Q_sensible_W"]
-        Q_latent += seg["Q_latent_W"]
-        row_records.append({
-            "Row_air_sequence": i,
-            "Air_in_DB_C": ai["T_C"],
-            "Air_out_DB_C": ao["T_C"],
-            "Air_in_WB_C": ai["Twb_C"],
-            "Air_out_WB_C": ao["Twb_C"],
-            "Air_in_RH_pct": ai["RH_pct"],
-            "Air_out_RH_pct": ao["RH_pct"],
-            "Air_in_W_g_kgda": ai["W"] * 1000.0,
-            "Air_out_W_g_kgda": ao["W"] * 1000.0,
-            "Water_in_C": twi,
-            "Water_out_C": seg["water_out_C"],
-            "Q_total_kW": seg["Q_W"] / 1000.0,
-            "Q_sensible_kW": seg["Q_sensible_W"] / 1000.0,
-            "Q_latent_kW": seg["Q_latent_W"] / 1000.0,
-            "Wet_fraction_pct": seg["wet_fraction"] * 100.0,
-            "Surface_mode": seg["surface_mode"],
-            "C_air_kW_K": seg["C_air_W_K"] / 1000.0,
-            "C_water_kW_K": seg["C_water_W_K"] / 1000.0,
-            "Cr": seg["Cr"],
-            "NTU_dry": seg["NTU_dry"],
-            "Effectiveness_dry": seg["effectiveness_dry"],
-            "Re_water": seg["Re_water"],
-            "Pr_water": seg["Pr_water"],
-        })
-    row_df = pd.DataFrame(row_records)
-
-    aout = final_rows[-1][2]["air_out"]
-    water_out_C = final_rows[0][2]["water_out_C"] if counter else final_rows[-1][2]["water_out_C"]
-    mean_w = 0.5 * (water_in_C + water_out_C)
-    props_final = coolant_props(coolant_kind, glycol_pct, mean_w, water_pressure_Pa)
-    water_ht_final = water_side_htc(geom, hyd.circuits, hyd.water_mass_flow_kg_s, props_final, hyd.tube_roughness_m)
-    hydres = water_pressure_drop(geom, hyd, props_final, water_ht_final)
-
-    wet_frac_Q = 0.0
-    if Q_total > 1e-9:
-        wet_frac_Q = sum(r[2]["wet_fraction"] * r[2]["Q_W"] for r in final_rows) / Q_total
-    dry_fraction = 1.0 - wet_frac_Q
-    dp_air = aircorr["dp_air_dry_Pa"] * (dry_fraction + wet_frac_Q * wet_air_dp_factor)
-    condensate = mdot_da * max(ain["W"] - aout["W"], 0.0)
-    SHR = min(max(Q_sensible / max(Q_total, 1e-12), 0.0), 1.0)
-
-    C_air = mdot_da * ain["cp_da"]
-    C_w = hyd.water_mass_flow_kg_s * props_final["cp"]
-    Cmin, Cmax = min(C_air, C_w), max(C_air, C_w)
-    Cr = Cmin / max(Cmax, 1e-12)
-    UA_dry_sum = float(sum(r[2]["UA_dry_W_K"] for r in final_rows))
-    NTU_ref = UA_dry_sum / max(Cmin, 1e-12)
-    eps_ref = crossflow_effectiveness(NTU_ref, Cr, Cmin_is_water=(C_w <= C_air))
-    hsat_wi = saturation_enthalpy(water_in_C, air_in_cond.pressure_Pa)
-    eps_h = (ain["h_J_kgda"] - aout["h_J_kgda"]) / max(ain["h_J_kgda"] - hsat_wi, 1e-12)
-    eps_T_air = (ain["T_C"] - aout["T_C"]) / max(ain["T_C"] - water_in_C, 1e-12)
-
-    # Resistance diagnostics on full-coil area at mean coolant properties.
-    eta_fd = fin_efficiency_staggered(g, h_air, 1.0)
-    eta_od = overall_surface_efficiency(geom, eta_fd)
-    R_air = 1.0 / max(eta_od * h_air * geom["A_air_total_m2"], 1e-12) + air_fouling_m2K_W / max(geom["A_air_total_m2"], 1e-12)
-    R_water_film = 1.0 / max(water_ht_final["h_water_W_m2K"] * geom["A_i_total_m2"], 1e-12) + water_fouling_m2K_W / max(geom["A_i_total_m2"], 1e-12)
-    R_wall = math.log(g.tube_od_m / geom["Di_m"]) / (2.0 * math.pi * g.tube_k_W_mK * geom["L_total_tube_m"])
-    R_total = R_air + R_water_film + R_wall
-    resistance_limiting = "Air side" if R_air >= (R_water_film + R_wall) else "Water/tube side"
-    capacity_rate_limiting = "Air side" if C_air <= C_w else "Water/coolant side"
-
-    # Air velocity reporting: face velocity and velocity through minimum free area between fins/tubes.
-    face_velocity = air_volume_flow_m3_s / max(geom["face_area_m2"], 1e-12)
-    u_core = aircorr["u_max_m_s"]
-
-    # Surface mode summary.
-    modes = [r[2]["surface_mode"] for r in final_rows]
-    if all(m == "Dry" for m in modes):
-        surf_mode = "Dry"
-    elif all(m == "Fully wet" for m in modes):
-        surf_mode = "Fully wet"
-    else:
-        surf_mode = "Mixed / partially wet by row"
-
-    return {
-        "geometry": geom,
-        "air_in": ain,
-        "air_out": aout,
-        "air_corr": aircorr,
-        "water_props": props_final,
-        "water_ht": water_ht_final,
-        "hydraulics": hydres,
-        "row_table": row_df,
-        "row_marching_converged": converged,
-        "row_marching_iterations": iterations,
-        "water_thermal_arrangement": water_thermal_arrangement,
-        "Q_total_kW": Q_total / 1000.0,
-        "Q_sensible_kW": Q_sensible / 1000.0,
-        "Q_latent_kW": max(Q_total - Q_sensible, 0.0) / 1000.0,
-        "SHR": SHR,
-        "water_out_C": water_out_C,
-        "condensate_kg_h": condensate * 3600.0,
-        "f_dry": dry_fraction,
-        "wet_fraction": wet_frac_Q,
-        "surface_mode": surf_mode,
-        "air_dp_Pa": dp_air,
-        "eta_fin_dry": eta_fd,
-        "eta_o_dry": eta_od,
-        "UA_dry_W_K": UA_dry_sum,
-        "mdot_da_kg_s": mdot_da,
-        "face_velocity_m_s": face_velocity,
-        "core_max_velocity_m_s": u_core,
-        "C_air_kW_K": C_air / 1000.0,
-        "C_water_kW_K": C_w / 1000.0,
-        "Cmin_kW_K": Cmin / 1000.0,
-        "Cmax_kW_K": Cmax / 1000.0,
-        "capacity_ratio_Cr": Cr,
-        "NTU_dry_reference": NTU_ref,
-        "effectiveness_dry_reference": eps_ref,
-        "effectiveness_enthalpy_wet": eps_h,
-        "effectiveness_air_temperature": eps_T_air,
-        "capacity_rate_limiting_side": capacity_rate_limiting,
-        "resistance_limiting_side": resistance_limiting,
-        "R_air_fraction": R_air / max(R_total, 1e-12),
-        "R_water_fraction": R_water_film / max(R_total, 1e-12),
-        "R_wall_fraction": R_wall / max(R_total, 1e-12),
-    }
-
-
-def design_recommendations(
-    base_result: Dict[str, object],
-    target: Dict[str, object],
-    g: CoilGeometry,
-    air_in_cond: AirCondition,
-    air_volume_flow_m3_s: float,
-    coolant_kind: str,
-    glycol_pct: float,
-    water_in_C: float,
-    water_pressure_Pa: float,
-    hyd: HydraulicInputs,
-    air_htc_multiplier: float = 1.0,
-    air_dp_multiplier: float = 1.0,
-    wet_air_dp_factor: float = 1.12,
-    air_fouling_m2K_W: float = 0.0,
-    water_fouling_m2K_W: float = 0.0,
-    water_thermal_arrangement: str = "Counterflow / water enters air-leaving side",
-) -> pd.DataFrame:
-    """One-variable-at-a-time design alternatives when the selected coil misses the target.
-
-    "Best" is ranked by the smallest relative input change, not lifecycle cost. The table shows
-    resulting air/water pressure drops so the engineer can reject an option with excessive penalty.
-    """
-    if target_is_met(base_result, target):
-        return pd.DataFrame([{"Option": "Current design", "Change": "No change required", "Target_met": True,
-                              "Q_kW": base_result["Q_total_kW"], "Air_out_DB_C": base_result["air_out"]["T_C"],
-                              "Air_out_WB_C": base_result["air_out"]["Twb_C"], "Air_dP_Pa": base_result["air_dp_Pa"],
-                              "Water_dP_kPa": base_result["hydraulics"]["dp_total_avg_kPa"], "Relative_change_pct": 0.0}])
-
-    candidates = []
-    common = dict(air_htc_multiplier=air_htc_multiplier, air_dp_multiplier=air_dp_multiplier,
-                  wet_air_dp_factor=wet_air_dp_factor, air_fouling_m2K_W=air_fouling_m2K_W,
-                  water_fouling_m2K_W=water_fouling_m2K_W, water_thermal_arrangement=water_thermal_arrangement)
-
-    # 1) Add rows, up to 16 total.
-    for nr in range(g.rows + 1, min(16, g.rows + 6) + 1):
-        gg = CoilGeometry(g.face_width_m, g.face_height_m, nr, g.transverse_pitch_m, g.longitudinal_pitch_m,
-                          g.tube_od_m, g.tube_thickness_m, g.fpi, g.fin_thickness_m, g.fin_k_W_mK,
-                          g.tube_k_W_mK, g.wave_amplitude_2x_m, g.wave_half_period_m)
-        rr = thermal_performance(gg, air_in_cond, air_volume_flow_m3_s, coolant_kind, glycol_pct,
-                                 water_in_C, water_pressure_Pa, hyd, **common)
-        if target_is_met(rr, target):
-            candidates.append((100.0 * (nr / g.rows - 1.0), "Increase rows", f"{g.rows} → {nr} rows", rr))
-            break
-
-    # 2) Increase water flow. This can help when water-side capacity rate/HTC is restrictive.
-    for mult in [1.15, 1.30, 1.50, 1.75, 2.00]:
-        hh = HydraulicInputs(hyd.circuits, hyd.water_mass_flow_kg_s * float(mult), hyd.inlet_header_od_m,
-                             hyd.inlet_header_thickness_m, hyd.outlet_header_od_m, hyd.outlet_header_thickness_m,
-                             hyd.header_length_m, hyd.header_arrangement, hyd.tube_roughness_m, hyd.header_roughness_m,
-                             hyd.return_bend_K, hyd.branch_takeoff_K, hyd.common_entry_K, hyd.common_exit_K)
-        rr = thermal_performance(g, air_in_cond, air_volume_flow_m3_s, coolant_kind, glycol_pct,
-                                 water_in_C, water_pressure_Pa, hh, **common)
-        if target_is_met(rr, target):
-            candidates.append((100.0 * (float(mult) - 1.0), "Increase water flow",
-                               f"{hyd.water_mass_flow_kg_s:.3f} → {hh.water_mass_flow_kg_s:.3f} kg/s", rr))
-            break
-
-    # 3) Increase face area while preserving aspect ratio. Air volume flow is held constant.
-    for area_mult in [1.15, 1.30, 1.50, 1.75, 2.00]:
-        linear = math.sqrt(float(area_mult))
-        gg = CoilGeometry(g.face_width_m * linear, g.face_height_m * linear, g.rows,
-                          g.transverse_pitch_m, g.longitudinal_pitch_m, g.tube_od_m, g.tube_thickness_m,
-                          g.fpi, g.fin_thickness_m, g.fin_k_W_mK, g.tube_k_W_mK,
-                          g.wave_amplitude_2x_m, g.wave_half_period_m)
-        # Header length follows face height if the original header length approximately did.
-        hdrL = hyd.header_length_m * linear if abs(hyd.header_length_m - g.face_height_m) < 0.15 * g.face_height_m else hyd.header_length_m
-        hh = HydraulicInputs(hyd.circuits, hyd.water_mass_flow_kg_s, hyd.inlet_header_od_m,
-                             hyd.inlet_header_thickness_m, hyd.outlet_header_od_m, hyd.outlet_header_thickness_m,
-                             hdrL, hyd.header_arrangement, hyd.tube_roughness_m, hyd.header_roughness_m,
-                             hyd.return_bend_K, hyd.branch_takeoff_K, hyd.common_entry_K, hyd.common_exit_K)
-        rr = thermal_performance(gg, air_in_cond, air_volume_flow_m3_s, coolant_kind, glycol_pct,
-                                 water_in_C, water_pressure_Pa, hh, **common)
-        if target_is_met(rr, target):
-            candidates.append((100.0 * (float(area_mult) - 1.0), "Increase coil face area",
-                               f"{g.face_width_m:.2f}×{g.face_height_m:.2f} → {gg.face_width_m:.2f}×{gg.face_height_m:.2f} m", rr))
-            break
-
-    rows = []
-    for rel, option, change, rr in sorted(candidates, key=lambda x: x[0]):
-        rows.append({
-            "Option": option,
-            "Change": change,
-            "Relative_change_pct": rel,
-            "Target_met": True,
-            "Q_kW": rr["Q_total_kW"],
-            "Air_out_DB_C": rr["air_out"]["T_C"],
-            "Air_out_WB_C": rr["air_out"]["Twb_C"],
-            "Air_out_RH_pct": rr["air_out"]["RH_pct"],
-            "Air_dP_Pa": rr["air_dp_Pa"],
-            "Water_dP_kPa": rr["hydraulics"]["dp_total_avg_kPa"],
-            "Tube_velocity_m_s": rr["water_ht"]["velocity_m_s"],
-        })
-    if not rows:
-        rows.append({
-            "Option": "Combination required",
-            "Change": "No single change within +6 rows, +100% water flow, or +100% face area met the target.",
-            "Relative_change_pct": np.nan,
-            "Target_met": False,
-            "Q_kW": base_result["Q_total_kW"],
-            "Air_out_DB_C": base_result["air_out"]["T_C"],
-            "Air_out_WB_C": base_result["air_out"]["Twb_C"],
-            "Air_out_RH_pct": base_result["air_out"]["RH_pct"],
-            "Air_dP_Pa": base_result["air_dp_Pa"],
-            "Water_dP_kPa": base_result["hydraulics"]["dp_total_avg_kPa"],
-            "Tube_velocity_m_s": base_result["water_ht"]["velocity_m_s"],
-        })
-    return pd.DataFrame(rows)
-
-
-# Extend warnings for v2 diagnostics while preserving the earlier checks.
-_warnings_for_result_v1 = warnings_for_result
-
-def warnings_for_result(result: Dict[str, object]) -> List[str]:
-    w = _warnings_for_result_v1(result)
-    if not result.get("row_marching_converged", True):
-        w.append("Row-by-row counterflow iteration did not fully converge; review the case before using the result.")
-    if result.get("capacity_ratio_Cr", 0.0) > 0.95:
-        w.append("Air and coolant heat-capacity rates are very similar (Cr > 0.95); performance is sensitive to UA and flow arrangement.")
-    if result.get("R_air_fraction", 0.0) > 0.70:
-        w.append("More than 70% of the calculated dry thermal resistance is on the air side; increasing water flow alone is unlikely to give a large capacity gain.")
-    if result.get("R_water_fraction", 0.0) > 0.50:
-        w.append("Water-side film resistance is a major part of total resistance; review tube velocity, number of circuits, coolant viscosity and water flow.")
     return w

@@ -44,18 +44,19 @@ Gnielinski remains a standard modern engineering correlation for turbulent inter
 
 ## 6. Water pressure drop and circuiting
 
-Each parallel circuit receives `total mass flow / number of circuits` under the equal-flow assumption. Integer tube counts are distributed among circuits. For every circuit the app includes:
+The row-bank fallback begins with equal flow, but a complete physical circuit map activates the explicit parallel-path network. Unequal route lengths are allowed when each circuit exits at the required header end. For same-end headers this normally means every route is even-pass; for opposite-end headers every route is odd-pass. For every mapped circuit the app includes:
 
+- its actual number of straight tube passes and tube length
 - straight tube Darcy friction
 - one configurable return-bend `K` for each tube-to-tube turn
 - circuit takeoff/return `K`
-- distributed supply header friction
-- distributed return header friction
-- common inlet and outlet `K`
+- distributed supply-header friction from the actual branch position
+- distributed return-header friction from the actual return position
+- common inlet/outlet loss terms
 
 Inlet and outlet headers each have independent OD and wall-thickness inputs; ID is calculated from them.
 
-The app reports min/average/max circuit path pressure drop. A large spread is a warning that equal circuit flow may not be self-consistent and that a full hydraulic network solution or balancing modification is needed.
+The mapped network iterates parallel circuit flows toward common path pressure loss and reports min/average/max path pressure drop, circuit flow deviation and velocity. Equal pass counts are preferred but are not a hard requirement. If outlet-end parity cannot be met while using every tube, practical coil construction may require a special crossover/header arrangement or blank/dropped tube(s).
 
 ## 7. Standards / references to validate against
 
@@ -78,3 +79,10 @@ Use 10–30 trusted coil operating points spanning rows, FPI, face velocity, ent
 6. water pressure drop
 
 Calibrate only physically defensible multipliers/K values, then lock them by fin tooling and header/bend construction rather than fitting each coil independently.
+
+
+## 9. Fully coupled local thermal network
+
+With a complete route, v2.4 solves every `R#-T#` tube cell using that tube's local entering coolant temperature, its circuit's solved mass flow and the local entering air state from the upstream row in the same vertical lane. Both outlet states are propagated and the entire crossed network is iterated to convergence. The row table is an aggregate reporting view of the tube-cell results; it is not a substitute for the local calculation.
+
+Remaining explicit simplifications are uniform entering airflow per vertical lane, no lateral air redistribution and no cross-fin conduction between neighbouring tube cells.

@@ -91,11 +91,13 @@ For every parallel circuit, the app calculates:
 
 where:
 
-- each circuit gets total flow / number of circuits for the first equal-flow solution;
-- integer tube counts are distributed between circuits;
-- actual circuit tube length follows its tube count;
+- the simple row-bank fallback starts from equal flow;
+- a complete physical circuit map activates an explicit parallel-path network;
+- unequal route lengths are allowed when each circuit satisfies the required outlet-end parity;
+- actual circuit tube length follows its own pass count;
 - every tube-to-tube return bend contributes a configurable `K`;
-- circuit takeoff/return minor-loss `K` is configurable.
+- circuit takeoff/return minor-loss `K` is configurable;
+- explicit mapped-circuit flows are iterated toward common parallel-path pressure loss.
 
 The app reports individual circuit path losses instead of only one averaged number.
 
@@ -118,7 +120,7 @@ Header flow is reduced/accumulated segment-by-segment as branches leave or enter
 - maximum circuit-path ΔP;
 - pressure spread between paths.
 
-A large path spread triggers a warning because the initial equal-flow assumption is then internally inconsistent. A later production phase can add a nonlinear hydraulic network solver to solve unequal circuit flows directly.
+For the row-bank fallback, a large path spread warns that equal flow may be inconsistent. With a complete physical route, v2.4 uses the explicit circuit network and iterates unequal circuit flows directly; circuit-specific mean temperature properties are fed back to the hydraulic calculation.
 
 ## 9. Wet/dry thermal calculation
 
@@ -131,7 +133,7 @@ The model first solves a dry coil and estimates surface temperatures. If the sur
 - energy balance for total load and leaving coolant temperature;
 - psychrometric inversion for leaving DB/RH/WB and humidity ratio.
 
-This is conceptually consistent with the established ACHP/EnergyPlus family of wet/dry coil methods. It is not a CFD or tube-by-tube circuit solver.
+This is conceptually consistent with the established ACHP/EnergyPlus family of wet/dry coil methods. In the row-bank fallback it is applied row-by-row. With a complete physical circuit map, v2.4 applies the same local wet/dry cell calculation tube-by-tube in a coupled 2-D air-lane/circuit network.
 
 ## 10. What still needs manufacturer validation
 
@@ -176,3 +178,49 @@ The segmented thermal solver now reports both heat-capacity-rate limitation and 
 For wet rows, total heat transfer is evaluated with the enthalpy-potential method. A separate wet enthalpy effectiveness is reported because classic temperature effectiveness alone does not represent latent heat transfer.
 
 The air velocity reported "inside the fins" is the maximum core velocity calculated from humid-air mass flow divided by the **minimum free-flow area** between fins/tubes. It is distinct from face velocity based on gross face area.
+
+## 11. v2.1 flow-geometry and fin-family correction
+
+### Physical flow arrangement
+
+A conventional AHU chilled-water fin-and-tube coil is locally a **cross-flow heat exchanger**:
+air flows through the coil depth while water/glycol flows along the tube axes.  These velocity
+vectors are approximately perpendicular.  Therefore the app no longer presents bare
+`parallel-flow` or `counterflow` as physical coil geometries.
+
+The only selectable connection sense is the water progression across the row bank:
+
+1. water enters the air-leaving side -> **cross-counterflow tendency**;
+2. water enters the air-entering side -> **cross-parallelflow tendency**.
+
+The dry row calculation uses the existing cross-flow effectiveness function in either case;
+the connection sense only changes the coolant-temperature boundary conditions assigned to
+successive air rows.
+
+### Fin families
+
+**Plain fin** now uses the Wang, Chi & Chang (2000) plain-fin j/f correlation.  **Wavy +
+louvers** retains the Wang-Tsai-Lu formulation documented by ACHP.  **Wavy fin** is exposed as
+a separate manufacturing option but is deliberately treated as a calibration-required
+baseline using the verified plain-fin Wang correlation plus developed wavy surface area until
+the exact dedicated wavy-fin equation set is sourced and verified.  This avoids silently
+inventing coefficients.
+
+### Material conductivities used by the UI
+
+- Aluminum: 205 W/(m.K)
+- Copper: 380 W/(m.K)
+- Steel: 50 W/(m.K)
+- CuNi 90/10: 29 W/(m.K) (tube option)
+
+Final production work should replace generic conductivity values with the actual alloy/temper
+or material specification when known.
+
+
+## 12. v2.4 fully coupled tube-by-tube model
+
+When the physical circuit map is complete, the computational state is defined at every `R#-T#` tube cell rather than by one mean coolant temperature per row. The local cell receives its own entering air state, entering coolant temperature and circuit flow. The leaving air is propagated downstream in the same vertical air lane; the leaving coolant is propagated to the next tube in the routed circuit. Fixed-point iteration closes the crossed air/coolant network.
+
+Unequal pass counts are permitted. For a common same-end header arrangement every circuit must remain even-pass; for a common opposite-end arrangement every circuit must remain odd-pass. Therefore practical unequal banks commonly use pass counts separated by two. If the physical tube total cannot satisfy the selected parity, the manufacturing solution may require a changed circuit count, special crossover/header geometry, or blank/dropped tubes.
+
+The 2-D model currently assumes uniform entering dry-air mass flow per vertical tube lane and neglects lateral air redistribution and cross-fin conduction. Those assumptions are explicit and should be validated for the intended coil geometry.
