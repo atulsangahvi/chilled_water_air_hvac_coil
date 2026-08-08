@@ -124,6 +124,12 @@ def air_state_from_db_wb(db_C: float, wb_C: float, P: float = P_ATM) -> Dict[str
 
 
 def air_state_from_T_W(db_C: float, W: float, P: float = P_ATM) -> Dict[str, float]:
+    """Return a complete humid-air state from dry-bulb temperature and humidity ratio.
+
+    All air-state constructors in this module intentionally return the same core fields.
+    The fully coupled 2-D tube solver conserves dry-air mass flow from cell to cell, so it
+    requires the humid-air specific volume ``Vda_m3_kgda`` at every intermediate state.
+    """
     _need_coolprop()
     T = db_C + 273.15
     W = max(W, 1e-9)
@@ -131,8 +137,17 @@ def air_state_from_T_W(db_C: float, W: float, P: float = P_ATM) -> Dict[str, flo
     RH = HAPropsSI("R", "T", T, "P", P, "W", W) * 100.0
     Tdp = HAPropsSI("D", "T", T, "P", P, "W", W) - 273.15
     Twb = HAPropsSI("B", "T", T, "P", P, "W", W) - 273.15
-    return dict(T_C=db_C, RH_pct=RH, W=W, h_J_kgda=h, Tdp_C=Tdp, Twb_C=Twb,
-                cp_da=1006.0 + W * 1860.0)
+    try:
+        Vda = HAPropsSI("Vda", "T", T, "P", P, "W", W)
+    except Exception:
+        # Ideal-gas backup, m3 humid air / kg dry air.
+        Vda = 287.055 * T * (1.0 + 1.6078 * W) / P
+    rho_ha = (1.0 + W) / max(Vda, 1e-12)
+    cp_da = 1006.0 + W * 1860.0
+    return dict(
+        T_C=db_C, RH_pct=RH, W=W, h_J_kgda=h, Tdp_C=Tdp, Twb_C=Twb,
+        rho_ha=rho_ha, Vda_m3_kgda=Vda, cp_da=cp_da,
+    )
 
 
 def T_from_h_W(h_J_kgda: float, W: float, P: float = P_ATM) -> float:

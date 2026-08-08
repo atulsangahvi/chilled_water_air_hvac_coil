@@ -252,7 +252,7 @@ This is deliberately labelled as a **row-duty-conserving circuit temperature pos
 
 The PDF report includes the physical circuit map, circuit hydraulic table, and circuit outlet temperatures when a complete circuit route is defined.
 
-## v2.4.1 hotfix
-- Fixed DB + WB leaving-air target mode: `target_load_db_wb()` now correctly uses its `Vdot_m3_s` argument.
-- Added a regression test for DB + WB target-load calculation.
-- Included the hardened multi-user `auth.py` supporting either private Streamlit Secrets `password` values or valid bcrypt `password_hash` values.
+### v2.4.2 hotfix
+- Fixed the fully coupled tube-by-tube solver intermediate-air-state crash (`KeyError: Vda_m3_kgda`).
+- `air_state_from_T_W()` now returns the same complete core psychrometric fields as the DB+RH and DB+WB constructors, including humid-air specific volume and density.
+- Added a defensive specific-volume fallback inside `tube2d.py` and regression tests for both the normal and fallback paths.

@@ -127,7 +127,15 @@ def _run_grid_iteration(
             c = owner[label]
             q_c = max(flow_by_c[c], 1e-12)
             a_in = lane_air[t]
-            local_vdot = mdot_da_lane * a_in["Vda_m3_kgda"]
+            # ``air_state_from_T_W`` now always returns Vda_m3_kgda.  Keep a defensive
+            # ideal-gas fallback here as well so a custom/intermediate state can never
+            # crash the coupled solver merely because that convenience field is absent.
+            local_vda = a_in.get("Vda_m3_kgda")
+            if local_vda is None or not math.isfinite(float(local_vda)) or float(local_vda) <= 0.0:
+                T_K = float(a_in["T_C"]) + 273.15
+                W_local = max(float(a_in.get("W", 0.0)), 0.0)
+                local_vda = 287.055 * T_K * (1.0 + 1.6078 * W_local) / max(float(air_in_cond.pressure_Pa), 1.0)
+            local_vdot = mdot_da_lane * float(local_vda)
             local_hyd = replace(hyd, circuits=1, water_mass_flow_kg_s=q_c)
             rr = thermal_performance(
                 cell_g,
