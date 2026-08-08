@@ -1,3 +1,12 @@
+
+## v2.4.6 coolant-flow starting suggestion and expanded reports
+
+- The user selects coolant, concentration, entering temperature, pressure and the number of parallel circuits before entering coolant flow.
+- The app proposes a starting total coolant flow from the actual tube ID, number of parallel circuits and a user-adjustable target tube velocity (default 1.0 m/s).
+- This is only a starting suggestion. The user-entered flow is always the governing input for heat transfer, tube/header velocities and pressure-drop calculations.
+- PDF and JSON outputs now include complete coil construction, headers, calibration/fouling inputs, psychrometric states, independent air/water energy balances, HTC/j/f/Re/Pr/UA diagnostics, pressure-drop breakdown, circuit hydraulics and tube-by-tube thermal/flow diagnostics when explicit circuiting is active.
+- Additional CSV downloads are provided for tube-by-tube thermal results and circuit hydraulics.
+
 # Chilled Water Cooling Coil Designer
 
 Streamlit engineering app for **wet/dry chilled-water fin-and-tube cooling coils**. It was rebuilt from a DX evaporator app geometry/UI concept, but removes DX refrigerant evaporation/superheat calculations and replaces them with single-phase water/glycol heat transfer and hydraulics.
@@ -252,7 +261,14 @@ This is deliberately labelled as a **row-duty-conserving circuit temperature pos
 
 The PDF report includes the physical circuit map, circuit hydraulic table, and circuit outlet temperatures when a complete circuit route is defined.
 
-### v2.4.3 hotfix
+### v2.4.2 hotfix
 - Fixed the fully coupled tube-by-tube solver intermediate-air-state crash (`KeyError: Vda_m3_kgda`).
 - `air_state_from_T_W()` now returns the same complete core psychrometric fields as the DB+RH and DB+WB constructors, including humid-air specific volume and density.
 - Added a defensive specific-volume fallback inside `tube2d.py` and regression tests for both the normal and fallback paths.
+
+
+## Role-based downloads
+
+- **admin**: may download the standard **Output Report (PDF)**, the **Detailed Engineering Report (PDF)**, detailed JSON, row-by-row CSV, tube-by-tube thermal CSV, circuit hydraulics CSV, and circuit-route CSV/JSON files.
+- **engineer1 / engineer2**: may download only the standard **Output Report (PDF)**. Detailed engineering and raw data exports are restricted to the admin account.
+- The standard report name in the app is **Output Report**.

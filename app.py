@@ -8,7 +8,7 @@ import pandas as pd
 import streamlit as st
 
 st.set_page_config(
-    page_title="Chilled Water Cooling Coil Designer v2.4.3",
+    page_title="Chilled Water Cooling Coil Designer v2.4.6",
     page_icon="💧",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -22,12 +22,13 @@ from coil_core import (
     MM,
     air_state_from_db_wb,
     coolant_props,
+    suggested_coolant_flow_for_velocity,
     segmented_thermal_performance,
     target_load,
     target_load_db_wb,
     warnings_for_result,
 )
-from reporting import build_pdf
+from reporting import build_pdf, build_output_pdf
 from tube2d import coupled_tube_by_tube_performance
 from circuiting import (
     auto_serpentine_routes,
@@ -50,15 +51,17 @@ MATERIAL_K = {
 
 require_login()
 
+IS_ADMIN = str(st.session_state.get("role", "engineer")).strip().lower() == "admin"
+
 with st.sidebar:
     st.success(f"Logged in: {st.session_state.username} ({st.session_state.role})")
     if st.button("Logout", use_container_width=True):
         logout()
     st.divider()
-    st.caption("Engineering model v2.4.3 - fully coupled tube-by-tube thermal + physical circuiting")
+    st.caption("Engineering model v2.4.6 - fully coupled tube-by-tube thermal + physical circuiting")
     st.caption("Air crosses the tube axes; water connection side only changes row progression.")
 
-st.title("💧 Chilled Water Cooling Coil Designer v2.4.3")
+st.title("💧 Chilled Water Cooling Coil Designer v2.4.6")
 st.caption(
     "Wet/dry cooling - row-by-row air and coolant temperatures - air/water dP - "
     "target checking - multi-user Streamlit"
@@ -67,6 +70,17 @@ st.caption(
 input_tab, circuit_tab, result_tab, method_tab = st.tabs(["📐 Design Inputs", "🔀 Circuiting", "📊 Results", "📚 Method & Validation"])
 
 with input_tab:
+    with st.expander("Report / project details", expanded=False):
+        r1, r2 = st.columns(2)
+        customer_name = r1.text_input("Customer name", value="")
+        contact_name = r2.text_input("Contact", value="")
+        r1, r2 = st.columns(2)
+        project_name = r1.text_input("Project", value="")
+        reference = r2.text_input("Reference", value="")
+        r1, r2 = st.columns(2)
+        tag_description = r1.text_input("Tag / description", value="")
+        coil_quantity = r2.number_input("Coil quantity", min_value=1, max_value=999, value=1, step=1)
+
     st.subheader("1. Coil face and tube bank")
     c1, c2, c3 = st.columns(3)
     face_W = c1.number_input("Face width / tube length (m)", 0.20, 6.0, 1.20, 0.01)
@@ -119,7 +133,7 @@ with input_tab:
             wave_half_mm = a2.number_input("Wave half-period xf (mm)", 0.10, 10.0, 1.0, 0.05)
             if fin_type == "Wavy fin":
                 st.warning(
-                    "Wavy-only mode uses the verified Wang plain-fin j/f baseline on the developed wavy area. "
+                    "Wavy-only mode uses the verified Wang plain-fin j/f baseline with the corrected physical fin/tube area. "
                     "Do not treat it as a final manufacturer correlation until the exact wavy-fin die is calibrated."
                 )
             else:
@@ -211,23 +225,53 @@ with input_tab:
     )
     Tw_in = c3.number_input("Entering coolant temperature (degC)", -15.0, 30.0, 7.0, 0.1)
 
+    # Circuit count is intentionally entered before flow so the app can propose a starting flow
+    # corresponding to a user-selected tube velocity (default 1.0 m/s).
     c1, c2, c3 = st.columns(3)
     water_pressure_kPa = c1.number_input("Coolant pressure (kPa abs)", 80.0, 2500.0, 300.0, 10.0)
-    water_input = c2.selectbox("Coolant flow input", ["Volume flow (m3/h)", "Mass flow (kg/s)"], index=0)
+    circuits = c2.number_input("Parallel water circuits", 1, 300, 12, 1)
+    suggested_tube_velocity = c3.number_input(
+        "Starting tube velocity for flow suggestion (m/s)", 0.20, 3.00, 1.00, 0.05,
+        help="Starting-point only. The suggested total flow is based on tube ID x parallel circuits x this velocity. You remain free to enter any flow you want.",
+    )
+
+    try:
+        rho_ui = coolant_props(coolant, glycol, Tw_in, water_pressure_kPa * 1000.0)["rho"]
+    except Exception:
+        rho_ui = 1000.0
+    suggestion = suggested_coolant_flow_for_velocity(
+        Do_mm * MM, tw_mm * MM, int(circuits), suggested_tube_velocity, rho_ui
+    )
+    tube_ID_m_ui = suggestion["tube_ID_m"]
+    tube_flow_area_ui = suggestion["tube_flow_area_m2"]
+    suggested_Vdot_m3_s = suggestion["volume_flow_m3_s"]
+    suggested_Vdot_m3_h = suggestion["volume_flow_m3_h"]
+    suggested_L_s = suggestion["volume_flow_L_s"]
+    suggested_mdot_kg_s = suggestion["mass_flow_kg_s"]
+
+    st.info(
+        f"**Suggested starting coolant flow for {suggested_tube_velocity:.2f} m/s in each tube:** "
+        f"**{suggested_Vdot_m3_h:.3f} m3/h** = **{suggested_L_s:.3f} L/s** = "
+        f"**{suggested_mdot_kg_s:.3f} kg/s** at the current coolant density. "
+        f"Basis: tube ID **{tube_ID_m_ui*1000:.3f} mm**, {int(circuits)} parallel circuits. "
+        "This is only a starting recommendation; edit the actual flow below as required."
+    )
+
+    water_input = st.selectbox("Coolant flow input", ["Volume flow (m3/h)", "Mass flow (kg/s)"], index=0)
     if water_input == "Mass flow (kg/s)":
-        mdot_w = c3.number_input("Total coolant mass flow (kg/s)", 0.02, 200.0, 1.55, 0.01)
-        Vw_m3h = None
+        default_mass = float(st.session_state.get("cw_mass_flow_input", suggested_mdot_kg_s))
+        mdot_w = st.number_input("Total coolant mass flow (kg/s)", 0.02, 200.0, default_mass, 0.01, key="cw_mass_flow_input")
+        Vw_m3h = mdot_w / max(rho_ui, 1e-12) * 3600.0
     else:
-        Vw_m3h = c3.number_input("Total coolant volume flow (m3/h)", 0.05, 1000.0, 5.60, 0.05)
-        try:
-            rho_ui = coolant_props(coolant, glycol, Tw_in, water_pressure_kPa * 1000.0)["rho"]
-        except Exception:
-            rho_ui = 1000.0
+        default_vol = float(st.session_state.get("cw_volume_flow_input", suggested_Vdot_m3_h))
+        Vw_m3h = st.number_input("Total coolant volume flow (m3/h)", 0.05, 1000.0, default_vol, 0.05, key="cw_volume_flow_input")
         mdot_w = (Vw_m3h / 3600.0) * rho_ui
 
-    c1, c2 = st.columns(2)
-    circuits = c1.number_input("Parallel water circuits", 1, 300, 12, 1)
-    c2.metric("Approx coolant mass flow / circuit", f"{mdot_w/int(circuits):.3f} kg/s")
+    actual_tube_velocity_ui = (mdot_w / max(rho_ui, 1e-12)) / max(int(circuits) * tube_flow_area_ui, 1e-12)
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Actual entered volume flow", f"{Vw_m3h:.3f} m3/h")
+    c2.metric("Approx coolant mass flow / circuit", f"{mdot_w/int(circuits):.4f} kg/s")
+    c3.metric("Approx tube velocity from entered flow", f"{actual_tube_velocity_ui:.3f} m/s")
 
     circuit_connection_style = st.selectbox(
         "Circuit supply/return tube-end arrangement",
@@ -410,7 +454,10 @@ with input_tab:
                 )
 
             inp = {
-                "version": "2.4",
+                "version": "2.4.6",
+                "customer_name": customer_name, "contact_name": contact_name,
+                "project_name": project_name, "reference": reference,
+                "tag_description": tag_description, "coil_quantity": int(coil_quantity),
                 "face_width_m": face_W, "face_height_m": face_H, "rows": int(rows),
                 "Pt_mm": Pt_mm, "Pl_mm": Pl_mm, "tube_OD_mm": Do_mm, "tube_wall_mm": tw_mm,
                 "FPI": FPI, "fin_pitch_mm": 25.4/FPI, "fin_thickness_mm": tf_mm,
@@ -425,6 +472,11 @@ with input_tab:
                 "coolant": coolant, "glycol_pct": glycol, "water_in_C": Tw_in,
                 "water_pressure_kPa_abs": water_pressure_kPa, "water_mdot_kg_s": mdot_w,
                 "water_volume_m3_h": Vw_m3h, "circuits": int(circuits),
+                "suggested_tube_velocity_m_s": suggested_tube_velocity,
+                "suggested_water_volume_m3_h": suggested_Vdot_m3_h,
+                "suggested_water_L_s": suggested_L_s,
+                "suggested_water_mdot_kg_s": suggested_mdot_kg_s,
+                "actual_input_tube_velocity_m_s": actual_tube_velocity_ui,
                 "calculated_tubes_per_row": tubes_per_row_ui, "calculated_total_tubes": total_tubes_ui,
                 "circuit_connection_style": circuit_connection_style, "header_feed_end": header_feed_end,
                 "physical_flow_geometry": "Cross-flow (air perpendicular to tube/coolant direction)",
@@ -432,6 +484,12 @@ with input_tab:
                 "header_supply_OD_mm": hdr_in_od_mm, "header_supply_t_mm": hdr_in_t_mm,
                 "header_return_OD_mm": hdr_out_od_mm, "header_return_t_mm": hdr_out_t_mm,
                 "header_length_m": hdr_L, "header_arrangement": hdr_arr,
+                "air_htc_multiplier": h_mult, "air_dp_multiplier": dp_mult,
+                "wet_air_dp_factor": wet_dp_factor,
+                "air_fouling_m2K_W": Rfo, "water_fouling_m2K_W": Rfi,
+                "return_bend_K": bend_K, "branch_takeoff_K": branch_K,
+                "common_entry_K": entry_K, "common_exit_K": exit_K,
+                "tube_roughness_um": tube_rough_um, "header_roughness_um": hdr_rough_um,
                 "target_mode": target_mode, "target_format": target_state_mode,
                 "target_kW": target_kW, "target_DB_C": target_T,
                 "target_RH_pct": target_RH, "target_WB_C": target_WB,
@@ -619,15 +677,18 @@ with circuit_tab:
     with st.expander("Manufacturing pass / return-bend schedule"):
         st.caption("Bend side alternates automatically because each straight tube pass reverses the water direction along the face width.")
         st.dataframe(detail_df.round(3), use_container_width=True, hide_index=True, height=420)
-    d1, d2 = st.columns(2)
-    d1.download_button(
-        "Download circuit routes CSV", detail_df.to_csv(index=False),
-        file_name="coil_circuit_routes.csv", mime="text/csv", use_container_width=True,
-    )
-    d2.download_button(
-        "Download circuit routes JSON", json.dumps({str(k): v for k,v in routes.items()}, indent=2),
-        file_name="coil_circuit_routes.json", mime="application/json", use_container_width=True,
-    )
+    if IS_ADMIN:
+        d1, d2 = st.columns(2)
+        d1.download_button(
+            "Download circuit routes CSV", detail_df.to_csv(index=False),
+            file_name="coil_circuit_routes.csv", mime="text/csv", use_container_width=True,
+        )
+        d2.download_button(
+            "Download circuit routes JSON", json.dumps({str(k): v for k,v in routes.items()}, indent=2),
+            file_name="coil_circuit_routes.json", mime="application/json", use_container_width=True,
+        )
+    else:
+        st.caption("Circuit-route file exports are available to the admin account only.")
 
 
 with result_tab:
@@ -781,7 +842,7 @@ with result_tab:
             "Item": [
                 "Fin type", "Fin material", "Tube material", "FPI", "Fin pitch",
                 "Number of rows", "Tubes per row", "Total tubes", "Selected circuits", "Circuit model", "Tube length", "Fin count",
-                "Face / free-flow area", "Free-area ratio", "Air-side area", "Inside tube area",
+                "Face / free-flow area", "Free-area ratio", "External air-side area (total)", "Net fin area", "Exposed tube outside area", "Inside tube heat-transfer area",
             ],
             "Value": [
                 inp["fin_type"], inp["fin_material"], inp["tube_material"], f"{inp['FPI']:.1f} 1/in",
@@ -790,6 +851,7 @@ with result_tab:
                 f"{gcalc['tube_length_m']:.3f} m", gcalc["n_fins"],
                 f"{gcalc['face_area_m2']:.3f} / {gcalc['free_flow_area_m2']:.3f} m2",
                 f"{gcalc['free_area_ratio']:.3f}", f"{gcalc['A_air_total_m2']:.2f} m2",
+                f"{gcalc['A_fin_m2']:.2f} m2", f"{gcalc['A_bare_m2']:.2f} m2",
                 f"{gcalc['A_i_total_m2']:.2f} m2",
             ],
         })
@@ -824,41 +886,81 @@ with result_tab:
                 st.warning(item)
 
         st.subheader("Downloads")
-        c1, c2, c3 = st.columns(3)
-        _exclude = {"hydraulics", "row_table", "cell_table", "circuit_temperature", "hydraulics_equal_flow_reference", "circuit_validation"}
-        summary = {k: v for k, v in r.items() if k not in _exclude}
-        summary["hydraulics"] = {k: v for k, v in r["hydraulics"].items() if k != "table"}
-        if r.get("circuit_validation"):
-            cv = r["circuit_validation"]
-            summary["circuit_validation_summary"] = {
-                "valid": cv.get("valid"), "complete": cv.get("complete"), "balanced": cv.get("balanced"),
-                "assigned_count": cv.get("assigned_count"), "total_tubes": cv.get("total_tubes"),
-                "errors": cv.get("errors", []), "warnings": cv.get("warnings", []),
-                "pass_counts": cv.get("pass_counts", []),
-            }
-        if r.get("circuit_temperature"):
-            ct = r["circuit_temperature"]
-            summary["circuit_temperature_summary"] = {
-                "mixed_outlet_C": ct.get("mixed_outlet_C"),
-                "method_note": ct.get("method_note"),
-                "circuit_outlets": ct["circuit_outlet_table"].to_dict(orient="records"),
-            }
-        c1.download_button(
-            "Download summary JSON", json.dumps(summary, indent=2, default=float),
-            file_name=f"chilled_water_coil_{datetime.now():%Y%m%d_%H%M}.json",
-            mime="application/json", use_container_width=True, disabled=route_result_stale,
-        )
-        c2.download_button(
-            "Download row data CSV", row_df.to_csv(index=False),
-            file_name=f"coil_rows_{datetime.now():%Y%m%d_%H%M}.csv",
-            mime="text/csv", use_container_width=True, disabled=route_result_stale,
-        )
-        pdf = build_pdf(inp, r, t, warns, st.session_state.username)
-        c3.download_button(
-            "Download PDF report", pdf,
-            file_name=f"chilled_water_coil_report_{datetime.now():%Y%m%d_%H%M}.pdf",
-            mime="application/pdf", use_container_width=True, disabled=route_result_stale,
-        )
+        output_pdf = build_output_pdf(inp, r, t, st.session_state.username)
+
+        if IS_ADMIN:
+            st.caption("Admin access: standard Output Report plus detailed engineering and data exports.")
+            a1, a2 = st.columns(2)
+            a1.download_button(
+                "Download Output Report (PDF)", output_pdf,
+                file_name=f"chilled_water_coil_output_report_{datetime.now():%Y%m%d_%H%M}.pdf",
+                mime="application/pdf", use_container_width=True, disabled=route_result_stale,
+            )
+            detailed_pdf = build_pdf(inp, r, t, warns, st.session_state.username)
+            a2.download_button(
+                "Download Detailed Engineering Report (PDF)", detailed_pdf,
+                file_name=f"chilled_water_coil_detailed_engineering_report_{datetime.now():%Y%m%d_%H%M}.pdf",
+                mime="application/pdf", use_container_width=True, disabled=route_result_stale,
+            )
+
+            _exclude = {"hydraulics", "row_table", "cell_table", "circuit_temperature", "hydraulics_equal_flow_reference", "circuit_validation"}
+            summary = {k: v for k, v in r.items() if k not in _exclude}
+            summary["inputs"] = inp
+            summary["target"] = t
+            summary["hydraulics"] = {k: v for k, v in r["hydraulics"].items() if k != "table"}
+            if r["hydraulics"].get("table") is not None:
+                summary["hydraulic_circuit_table"] = r["hydraulics"]["table"].to_dict(orient="records")
+            if r.get("circuit_validation"):
+                cv = r["circuit_validation"]
+                summary["circuit_validation_summary"] = {
+                    "valid": cv.get("valid"), "complete": cv.get("complete"), "balanced": cv.get("balanced"),
+                    "assigned_count": cv.get("assigned_count"), "total_tubes": cv.get("total_tubes"),
+                    "errors": cv.get("errors", []), "warnings": cv.get("warnings", []),
+                    "pass_counts": cv.get("pass_counts", []),
+                }
+            if r.get("circuit_temperature"):
+                ct = r["circuit_temperature"]
+                summary["circuit_temperature_summary"] = {
+                    "mixed_outlet_C": ct.get("mixed_outlet_C"),
+                    "method_note": ct.get("method_note"),
+                    "circuit_outlets": ct["circuit_outlet_table"].to_dict(orient="records"),
+                }
+
+            c1, c2 = st.columns(2)
+            c1.download_button(
+                "Download Detailed Summary JSON", json.dumps(summary, indent=2, default=float),
+                file_name=f"chilled_water_coil_detailed_{datetime.now():%Y%m%d_%H%M}.json",
+                mime="application/json", use_container_width=True, disabled=route_result_stale,
+            )
+            c2.download_button(
+                "Download Row-by-Row CSV", row_df.to_csv(index=False),
+                file_name=f"coil_rows_{datetime.now():%Y%m%d_%H%M}.csv",
+                mime="text/csv", use_container_width=True, disabled=route_result_stale,
+            )
+            d1, d2 = st.columns(2)
+            cell_export = r.get("cell_table")
+            hyd_export = r.get("hydraulics", {}).get("table")
+            d1.download_button(
+                "Download Tube-by-Tube Thermal CSV",
+                (cell_export.to_csv(index=False) if cell_export is not None else "No explicit tube-by-tube circuit model in this run."),
+                file_name=f"coil_tube_by_tube_{datetime.now():%Y%m%d_%H%M}.csv",
+                mime="text/csv", use_container_width=True,
+                disabled=route_result_stale or cell_export is None,
+            )
+            d2.download_button(
+                "Download Circuit Hydraulics CSV",
+                (hyd_export.to_csv(index=False) if hyd_export is not None else "No hydraulic circuit table."),
+                file_name=f"coil_circuit_hydraulics_{datetime.now():%Y%m%d_%H%M}.csv",
+                mime="text/csv", use_container_width=True,
+                disabled=route_result_stale or hyd_export is None,
+            )
+        else:
+            st.caption("Engineer access: only the standard Output Report is downloadable. Detailed engineering calculations and data exports are restricted to admin.")
+            st.download_button(
+                "Download Output Report (PDF)", output_pdf,
+                file_name=f"chilled_water_coil_output_report_{datetime.now():%Y%m%d_%H%M}.pdf",
+                mime="application/pdf", use_container_width=True, disabled=route_result_stale,
+            )
 
 with method_tab:
     st.markdown(
@@ -872,7 +974,7 @@ The older labels **parallel flow** and **counterflow** were misleading when show
 ### Fin families
 
 - **Plain fin:** Wang, Chi & Chang (2000) plain fin-and-tube j/f correlation.
-- **Wavy fin:** plain-fin Wang baseline applied to developed wavy area, intentionally labelled as a calibration-required engineering baseline until a verified dedicated wavy-fin equation set is loaded.
+- **Wavy fin:** calibration-required Wang plain-fin baseline using the corrected physical fin/tube area; waviness is not counted again as an artificial area multiplier.
 - **Wavy + louvers:** Wang-Tsai-Lu wavy/louvered j/f correlation as documented by ACHP.
 
 ### Water side
@@ -885,7 +987,7 @@ Air is marched serially from the entering face to the leaving face. For water en
 
 ### Physical circuiting editor
 
-v2.4.3 uses the manufacturing circuit map directly in the thermal solution. A tube is identified by row and vertical position, for example `R6-T1`. A circuit is an ordered list of tube passes joined by return bends. The app checks duplicate/missing tubes, each circuit's pass count, same-end/even-pass and opposite-end/odd-pass compatibility, and long bend spans. **Equal pass counts are preferred but are not required.** A complete route activates the circuit-resolved header/friction network and the fully coupled tube-by-tube thermal solver.
+v2.4.6 uses the manufacturing circuit map directly in the thermal solution. A tube is identified by row and vertical position, for example `R6-T1`. A circuit is an ordered list of tube passes joined by return bends. The app checks duplicate/missing tubes, each circuit's pass count, same-end/even-pass and opposite-end/odd-pass compatibility, and long bend spans. **Equal pass counts are preferred but are not required.** A complete route activates the circuit-resolved header/friction network and the fully coupled tube-by-tube thermal solver.
 
 When a complete route is defined, the app switches to a fully coupled tube-by-tube / air-lane iteration. Each R#-T# cell receives the local air state from the previous row and the local coolant temperature from the previous tube in its circuit. The cell is solved as a local cross-flow wet/dry heat exchanger; both outlet states are then propagated and the whole grid is iterated to convergence. Unequal circuit lengths are allowed when every circuit retains the required even/odd outlet-end parity. The hydraulic network calculates the resulting unequal flows instead of assuming equal distribution.
 

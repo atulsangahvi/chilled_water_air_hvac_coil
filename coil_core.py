@@ -76,6 +76,32 @@ class HydraulicInputs:
     common_exit_K: float = 1.0
 
 
+def suggested_coolant_flow_for_velocity(tube_od_m: float, tube_thickness_m: float, circuits: int, target_velocity_m_s: float, density_kg_m3: float) -> Dict[str, float]:
+    """Starting coolant-flow suggestion from tube ID, parallel circuits and target tube velocity.
+
+    This is intentionally only a starting point for the UI.  The user-entered flow remains the
+    governing input for all subsequent thermal/hydraulic calculations.
+    """
+    Di = float(tube_od_m) - 2.0 * float(tube_thickness_m)
+    if Di <= 0:
+        raise ValueError("Tube wall thickness must be less than half of tube OD.")
+    N = max(int(circuits), 1)
+    v = max(float(target_velocity_m_s), 0.0)
+    rho = max(float(density_kg_m3), 1e-9)
+    area_one = math.pi * Di**2 / 4.0
+    Vdot = v * area_one * N
+    return {
+        "tube_ID_m": Di,
+        "tube_flow_area_m2": area_one,
+        "target_tube_velocity_m_s": v,
+        "parallel_circuits": N,
+        "volume_flow_m3_s": Vdot,
+        "volume_flow_m3_h": Vdot * 3600.0,
+        "volume_flow_L_s": Vdot * 1000.0,
+        "mass_flow_kg_s": Vdot * rho,
+    }
+
+
 # ---------- Psychrometrics ----------
 def _need_coolprop():
     if not HAS_COOLPROP:
@@ -210,13 +236,18 @@ def geometry_areas(g: CoilGeometry) -> Dict[str, float]:
     depth = Pl * g.rows
     A_face = g.face_width_m * g.face_height_m
 
-    # Waviness changes developed fin area. Plain fin has no area-length enhancement.
+    # IMPORTANT AREA BASIS:
+    # The air-side correlations are defined on the projected/core geometry.  Do NOT
+    # multiply fin area by a separate wavy developed-length factor here; doing so
+    # double-counts the surface enhancement already represented by the empirical
+    # wavy/louvered correlation and was found to overstate external area by ~45%
+    # on the 4-row reference benchmark. Keep sec_theta only as diagnostic metadata.
     if g.fin_type == "Plain fin":
         sec_theta = 1.0
     else:
         sec_theta = math.sqrt(g.wave_half_period_m ** 2 + g.wave_amplitude_2x_m ** 2) / max(g.wave_half_period_m, 1e-12)
 
-    # Minimum free-flow area: corrected orientation (fins counted along tube length, tubes per row by face height).
+    # Minimum free-flow area: fins counted along tube length, tubes per row by face height.
     A_c = (
         A_face
         - g.fin_thickness_m * n_fins * (g.face_height_m - g.tube_od_m * n_tubes_per_row)
@@ -225,9 +256,12 @@ def geometry_areas(g: CoilGeometry) -> Dict[str, float]:
     A_c = max(A_c, 0.02 * A_face)
 
     A_tube_outer_full = n_tubes_total * math.pi * g.tube_od_m * L_tube
+    # Net two-sided plate-fin area using PROJECTED fin-bank depth.
+    # Each continuous fin spans face height x (rows * longitudinal pitch).
+    # Subtract the circular tube holes once per side.
     A_one_fin = 2.0 * (
-        g.face_height_m * Pl * g.rows * sec_theta
-        - n_tubes_per_row * g.rows * math.pi * g.tube_od_m ** 2 / 4.0
+        g.face_height_m * Pl * g.rows
+        - n_tubes_total * math.pi * g.tube_od_m ** 2 / 4.0
     )
     A_fin = max(n_fins * A_one_fin, 0.0)
     exposed_tube_length = max(L_tube - n_fins * g.fin_thickness_m, 0.0)
@@ -249,6 +283,8 @@ def geometry_areas(g: CoilGeometry) -> Dict[str, float]:
         "A_tube_outer_full_m2": A_tube_outer_full,
         "A_fin_m2": A_fin,
         "A_bare_m2": A_bare,
+        "A_external_primary_tube_m2": A_bare,
+        "A_external_secondary_fin_m2": A_fin,
         "A_air_total_m2": A_air_total,
         "A_i_total_m2": A_i_total,
         "L_total_tube_m": L_total,
@@ -388,7 +424,7 @@ def airside_dispatch(
     * Plain fin: Wang, Chi & Chang (2000).
     * Wavy + louvers: Wang-Tsai-Lu correlation as documented by ACHP.
     * Wavy fin: transparent engineering baseline using the plain-fin Wang correlation on
-      the developed wavy area.  The 1999 Wang-Jang-Chiou paper confirms a dedicated wavy
+      the corrected physical fin/tube area. The 1999 Wang-Jang-Chiou paper confirms a dedicated wavy
       correlation exists, but its full equation is not reproduced in the open references
       bundled with this project; therefore no invented coefficients are used here.
     """
@@ -396,7 +432,7 @@ def airside_dispatch(
         return airside_wang_plain(geom, g, air_in, Vdot_m3_s, air_htc_multiplier, air_dp_multiplier, bank_rows)
     if g.fin_type == "Wavy fin":
         out = airside_wang_plain(geom, g, air_in, Vdot_m3_s, air_htc_multiplier, air_dp_multiplier, bank_rows)
-        out["correlation"] = "Wavy fin - Wang plain-fin baseline on developed wavy area"
+        out["correlation"] = "Wavy fin - Wang plain-fin baseline with corrected physical fin/tube area"
         out["correlation_note"] = "Calibration required; dedicated Wang-Jang-Chiou 1999 coefficients not hard-coded without a verified equation source"
         return out
     out = airside_wang_wavy_louvered(geom, g, air_in, Vdot_m3_s, air_htc_multiplier, air_dp_multiplier, bank_rows)
@@ -1074,7 +1110,7 @@ def warnings_for_result(result: Dict[str, object]) -> List[str]:
     elif ac["Re_air"] < 300 or ac["Re_air"] > 8000:
         w.append("Air Reynolds number is outside the approximate range used for the current wavy/louvered air-side model; extrapolation is occurring.")
     if result.get("fin_type") == "Wavy fin":
-        w.append("Wavy-fin mode currently uses a transparent plain-fin Wang baseline on developed wavy area. Calibrate h and dP against the actual wavy fin die before production use.")
+        w.append("Wavy-fin mode currently uses a transparent plain-fin Wang baseline with corrected physical fin/tube area. Calibrate h and dP against the actual wavy fin die before production use.")
     if wh["Re_water"] < 3000:
         w.append("Water-side Reynolds number is below 3000; turbulent Gnielinski performance is not fully established and heat transfer may be transition/laminar.")
     if wh["velocity_m_s"] < 0.45:
