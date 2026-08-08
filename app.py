@@ -8,7 +8,7 @@ import pandas as pd
 import streamlit as st
 
 st.set_page_config(
-    page_title="Chilled Water Cooling Coil Designer v2.4",
+    page_title="Chilled Water Cooling Coil Designer v2.4.3",
     page_icon="💧",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -55,10 +55,10 @@ with st.sidebar:
     if st.button("Logout", use_container_width=True):
         logout()
     st.divider()
-    st.caption("Engineering model v2.4 - fully coupled tube-by-tube thermal + physical circuiting")
+    st.caption("Engineering model v2.4.3 - fully coupled tube-by-tube thermal + physical circuiting")
     st.caption("Air crosses the tube axes; water connection side only changes row progression.")
 
-st.title("💧 Chilled Water Cooling Coil Designer v2.4")
+st.title("💧 Chilled Water Cooling Coil Designer v2.4.3")
 st.caption(
     "Wet/dry cooling - row-by-row air and coolant temperatures - air/water dP - "
     "target checking - multi-user Streamlit"
@@ -344,6 +344,7 @@ with input_tab:
     if st.button("🚀 Run chilled-water coil analysis", type="primary", use_container_width=True):
         try:
             routes_now = {int(k): list(v) for k, v in st.session_state.get("circuit_routes", {}).items()}
+            route_signature_now = json.dumps({str(k): v for k, v in sorted(routes_now.items())}, sort_keys=True)
             route_check = validate_routes(
                 routes_now, int(rows), tubes_per_row_ui, int(circuits), circuit_connection_style,
                 Pt_mm * MM, Pl_mm * MM,
@@ -359,6 +360,7 @@ with input_tab:
                 res["circuit_routes"] = routes_now
                 res["circuit_validation"] = route_check
                 res["circuit_model"] = "Explicit routed circuits + fully coupled 2-D tube-by-tube thermal model"
+                res["circuit_route_signature"] = route_signature_now
             else:
                 res = segmented_thermal_performance(
                     geom_obj, air_obj, Vdot, coolant, glycol, Tw_in, water_pressure_kPa * 1000.0,
@@ -366,7 +368,14 @@ with input_tab:
                 )
                 res["circuit_routes"] = routes_now
                 res["circuit_validation"] = route_check
-                res["circuit_model"] = "Equivalent row-bank model (complete physical circuit route not yet defined)"
+                if routes_now and route_check:
+                    reason = "circuit map incomplete or invalid"
+                    if route_check.get("errors"):
+                        reason += ": " + " | ".join(route_check.get("errors", [])[:3])
+                    res["circuit_model"] = f"Equivalent row-bank model ({reason})"
+                else:
+                    res["circuit_model"] = "Equivalent row-bank model (complete physical circuit route not yet defined)"
+                res["circuit_route_signature"] = route_signature_now
             if target_mode == "Required cooling capacity (kW)":
                 tar = {
                     "target_mode": target_mode,
@@ -520,9 +529,9 @@ with circuit_tab:
     if x4.button("Auto-generate serpentine", type="primary", use_container_width=True, disabled=not comp["fully_compatible"]):
         try:
             st.session_state["circuit_routes"] = auto_serpentine_routes(
-                int(rows), tubes_per_row_ui, int(circuits), circuit_connection_style
+                int(rows), tubes_per_row_ui, int(circuits), circuit_connection_style, water_progression
             )
-            st.session_state["circuit_editor_message"] = "Generated nearest-neighbour serpentine circuits using the parity-compatible pass distribution. Unequal circuit lengths are retained when required by geometry; review bend pattern and calculated maldistribution before manufacturing."
+            st.session_state["circuit_editor_message"] = "Generated nearest-neighbour serpentine circuits using the parity-compatible pass distribution and the selected water row progression. Unequal circuit lengths are retained when required by geometry; review bend pattern and calculated maldistribution before manufacturing."
             st.rerun()
         except Exception as exc:
             st.error(str(exc))
@@ -630,10 +639,19 @@ with result_tab:
         inp = st.session_state["cw_inputs"]
         target_met = st.session_state.get("cw_target_met", True)
         warns = warnings_for_result(r)
+        current_routes = {int(k): list(v) for k, v in st.session_state.get("circuit_routes", {}).items()}
+        current_route_signature = json.dumps({str(k): v for k, v in sorted(current_routes.items())}, sort_keys=True)
+        route_result_stale = current_route_signature != r.get("circuit_route_signature", "")
+        if route_result_stale:
+            st.error(
+                "The circuit map has changed since this analysis was run. These results/PDF are STALE and do not represent the current circuiting. "
+                "Return to Design Inputs and click Run chilled-water coil analysis again."
+            )
+        st.info(f"**Thermal solver actually used:** {r.get('circuit_model','Unknown')}")
 
-        if target_met:
+        if target_met and not route_result_stale:
             st.success("Selected coil meets the defined design target.")
-        else:
+        elif not route_result_stale:
             st.error("Selected coil does not meet the complete design target. See Design Improvement Guidance below.")
 
         st.subheader("Thermal performance")
@@ -828,18 +846,18 @@ with result_tab:
         c1.download_button(
             "Download summary JSON", json.dumps(summary, indent=2, default=float),
             file_name=f"chilled_water_coil_{datetime.now():%Y%m%d_%H%M}.json",
-            mime="application/json", use_container_width=True,
+            mime="application/json", use_container_width=True, disabled=route_result_stale,
         )
         c2.download_button(
             "Download row data CSV", row_df.to_csv(index=False),
             file_name=f"coil_rows_{datetime.now():%Y%m%d_%H%M}.csv",
-            mime="text/csv", use_container_width=True,
+            mime="text/csv", use_container_width=True, disabled=route_result_stale,
         )
         pdf = build_pdf(inp, r, t, warns, st.session_state.username)
         c3.download_button(
             "Download PDF report", pdf,
             file_name=f"chilled_water_coil_report_{datetime.now():%Y%m%d_%H%M}.pdf",
-            mime="application/pdf", use_container_width=True,
+            mime="application/pdf", use_container_width=True, disabled=route_result_stale,
         )
 
 with method_tab:
@@ -867,7 +885,7 @@ Air is marched serially from the entering face to the leaving face. For water en
 
 ### Physical circuiting editor
 
-v2.4 uses the manufacturing circuit map directly in the thermal solution. A tube is identified by row and vertical position, for example `R6-T1`. A circuit is an ordered list of tube passes joined by return bends. The app checks duplicate/missing tubes, each circuit's pass count, same-end/even-pass and opposite-end/odd-pass compatibility, and long bend spans. **Equal pass counts are preferred but are not required.** A complete route activates the circuit-resolved header/friction network and the fully coupled tube-by-tube thermal solver.
+v2.4.3 uses the manufacturing circuit map directly in the thermal solution. A tube is identified by row and vertical position, for example `R6-T1`. A circuit is an ordered list of tube passes joined by return bends. The app checks duplicate/missing tubes, each circuit's pass count, same-end/even-pass and opposite-end/odd-pass compatibility, and long bend spans. **Equal pass counts are preferred but are not required.** A complete route activates the circuit-resolved header/friction network and the fully coupled tube-by-tube thermal solver.
 
 When a complete route is defined, the app switches to a fully coupled tube-by-tube / air-lane iteration. Each R#-T# cell receives the local air state from the previous row and the local coolant temperature from the previous tube in its circuit. The cell is solved as a local cross-flow wet/dry heat exchanger; both outlet states are then propagated and the whole grid is iterated to convergence. Unequal circuit lengths are allowed when every circuit retains the required even/odd outlet-end parity. The hydraulic network calculates the resulting unequal flows instead of assuming equal distribution.
 

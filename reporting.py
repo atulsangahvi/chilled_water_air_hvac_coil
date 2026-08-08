@@ -134,7 +134,7 @@ def build_pdf(inputs: dict, result: dict, target: dict | None, warnings: list[st
         leftMargin=15 * mm,
         topMargin=15 * mm,
         bottomMargin=15 * mm,
-        title="Chilled Water Cooling Coil Design Report v2.4",
+        title="Chilled Water Cooling Coil Design Report v2.4.3",
     )
 
     pframe = Frame(15 * mm, 15 * mm, psize[0] - 30 * mm, psize[1] - 30 * mm, id="portrait_frame")
@@ -143,7 +143,7 @@ def build_pdf(inputs: dict, result: dict, target: dict | None, warnings: list[st
     def footer(canvas, d):
         canvas.saveState()
         canvas.setFont("Helvetica", 7)
-        canvas.drawString(15 * mm, 7 * mm, "Chilled Water Cooling Coil Designer v2.4")
+        canvas.drawString(15 * mm, 7 * mm, "Chilled Water Cooling Coil Designer v2.4.3")
         canvas.drawRightString(canvas._pagesize[0] - 15 * mm, 7 * mm, f"Page {d.page}")
         canvas.restoreState()
 
@@ -159,7 +159,7 @@ def build_pdf(inputs: dict, result: dict, target: dict | None, warnings: list[st
     styles.add(ParagraphStyle(name="Tiny", parent=styles["BodyText"], fontSize=7, leading=8.5, spaceAfter=2))
 
     story = [
-        Paragraph("Chilled Water Cooling Coil Design Report - v2.4", styles["TitleC"]),
+        Paragraph("Chilled Water Cooling Coil Design Report - v2.4.3", styles["TitleC"]),
         Paragraph(f"Prepared by user: {_safe(username)}", styles["Smallx"]),
         Paragraph(
             "Physical flow geometry: CROSS-FLOW (air perpendicular to tube/coolant direction). "
@@ -351,7 +351,7 @@ def build_pdf(inputs: dict, result: dict, target: dict | None, warnings: list[st
         story.append(_table(data, [12*mm, 12*mm, 21*mm, 18*mm, 18*mm, 20*mm, 20*mm, 20*mm, 17*mm, 15*mm], font=6.2, repeat=1))
         story.append(Spacer(1, 4))
         story.append(Paragraph(
-            "Model assumption: equal entering dry-air mass flow per vertical tube lane. Lateral air redistribution and cross-fin conduction between adjacent tubes are not included in v2.4.",
+            "Model assumption: equal entering dry-air mass flow per vertical tube lane. Lateral air redistribution and cross-fin conduction between adjacent tubes are not included in v2.4.3.",
             styles["Tiny"],
         ))
 
@@ -387,7 +387,7 @@ def build_pdf(inputs: dict, result: dict, target: dict | None, warnings: list[st
         "Plain fins use the Wang, Chi & Chang (2000) plain fin j/f correlation. Wavy+louvered fins use the Wang-Tsai-Lu correlation as documented by ACHP.",
         "Wavy-only mode is deliberately labelled a calibration-required baseline rather than inventing unverified correlation coefficients.",
         "Water-side heat transfer uses Gnielinski with transition treatment; tube/header pressure loss uses Darcy-Weisbach with Churchill friction.",
-        "With a complete circuit map, v2.4 uses a fully coupled tube-by-tube / air-lane model. Each tube cell receives its own entering coolant temperature and resolved circuit flow and feeds its outlet states to the next coolant pass and next air row.",
+        "With a complete circuit map, v2.4.3 uses a fully coupled tube-by-tube / air-lane model. Each tube cell receives its own entering coolant temperature and resolved circuit flow and feeds its outlet states to the next coolant pass and next air row.",
         "Unequal circuit pass counts are allowed when each circuit retains the required same-end/even or opposite-end/odd outlet parity. The explicit hydraulic solver calculates the resulting flow maldistribution rather than assuming equal flow.",
         "The 2-D model assumes equal entering dry-air mass flow among vertical lanes and does not yet include lateral cross-fin conduction between adjacent tubes; these are explicit higher-order refinements.",
         "Validate air HTC, wet air dP and fitting K values against actual coil test or trusted manufacturer data before production release.",

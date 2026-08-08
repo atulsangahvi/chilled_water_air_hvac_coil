@@ -169,7 +169,7 @@ def compatibility_summary(total_tubes: int, circuits: int, connection_style: str
     }
 
 
-def auto_serpentine_routes(rows: int, tubes_per_row: int, circuits: int, connection_style: str) -> Dict[int, List[str]]:
+def auto_serpentine_routes(rows: int, tubes_per_row: int, circuits: int, connection_style: str, water_progression: str | None = None) -> Dict[int, List[str]]:
     """Create compact nearest-neighbour serpentine routes, including valid unequal routes.
 
     When exact equal passes are impossible, the generator uses the closest all-tubes-used
@@ -186,6 +186,21 @@ def auto_serpentine_routes(rows: int, tubes_per_row: int, circuits: int, connect
             "circuits on the required outlet end. Choose another circuit count, use a special "
             "crossover arrangement, or intentionally drop tube(s)."
         )
+    # Preferred coolant inlet row for the selected air/water progression.  R1 is the
+    # entering-air row and RN is the leaving-air row.  The physical local geometry is
+    # still cross-flow; this only chooses which depth-side receives the cold-water inlet.
+    cold_at_leaving_side = bool(water_progression and "air-leaving" in str(water_progression).lower())
+    preferred_start_row = int(rows) if cold_at_leaving_side else 1
+
+    # Very common manufacturing case: one circuit per vertical tube position and the
+    # requested pass count equals the number of rows.  Route every circuit through one
+    # vertical stack so ALL circuits begin on the selected coolant-inlet side.  This avoids
+    # the old alternating R1/RN inlet pattern, which unintentionally mixed cross-parallel
+    # and cross-counterflow tendencies across the face.
+    if int(circuits) == int(tubes_per_row) and all(int(n) == int(rows) for n in counts):
+        rr = list(range(int(rows), 0, -1)) if preferred_start_row == int(rows) else list(range(1, int(rows) + 1))
+        return {c: [tube_id(r, c) for r in rr] for c in range(1, int(circuits) + 1)}
+
     global_path: List[str] = []
     for t in range(1, int(tubes_per_row) + 1):
         rr = range(1, int(rows) + 1) if t % 2 else range(int(rows), 0, -1)
@@ -193,8 +208,17 @@ def auto_serpentine_routes(rows: int, tubes_per_row: int, circuits: int, connect
     routes: Dict[int, List[str]] = {}
     cursor = 0
     for c, n in enumerate(counts, 1):
-        routes[c] = global_path[cursor:cursor + int(n)]
+        route = global_path[cursor:cursor + int(n)]
         cursor += int(n)
+        # Orient each generated route so its inlet endpoint is as close as possible to the
+        # selected cold-water depth side. Reversing a route preserves tube ownership, bend
+        # spans, pass count, and same-end/opposite-end parity.
+        if route:
+            r0, _ = parse_tube_id(route[0])
+            r1, _ = parse_tube_id(route[-1])
+            if abs(r1 - preferred_start_row) < abs(r0 - preferred_start_row):
+                route = list(reversed(route))
+        routes[c] = route
     if cursor != len(global_path):
         raise RuntimeError("Internal circuit generator did not allocate every tube.")
     return routes
