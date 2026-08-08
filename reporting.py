@@ -200,7 +200,7 @@ def build_output_pdf(inputs: dict, result: dict, target: dict | None, username: 
         ["Number of passes", passes_text],
         ["Fins per inch", f"{float(inputs.get('FPI',0)):.1f}"],
         ["Tube material", f"{inputs.get('tube_material','')} - wall {float(inputs.get('tube_wall_mm',0)):.3f} mm"],
-        ["Tube diameter", f"OD {float(inputs.get('tube_OD_mm',0)):.3f} mm / ID {float(g.get('tube_ID_m',0))*1000:.3f} mm"],
+        ["Tube diameter", f"OD {float(inputs.get('tube_OD_mm',0)):.3f} mm / ID {float(g.get('Di_m', (float(inputs.get('tube_OD_mm',0))-2.0*float(inputs.get('tube_wall_mm',0)))/1000.0))*1000:.3f} mm"],
         ["Fin material", f"{inputs.get('fin_material','')} - {float(inputs.get('fin_thickness_mm',0)):.3f} mm"],
         ["Fin surface", inputs.get("fin_type", "")],
         ["Face area", f"{float(g.get('face_area_m2',0)):.3f} m2"],
@@ -276,7 +276,7 @@ def build_pdf(inputs: dict, result: dict, target: dict | None, warnings: list[st
         leftMargin=15 * mm,
         topMargin=15 * mm,
         bottomMargin=15 * mm,
-        title="Chilled Water Cooling Coil Detailed Engineering Report v2.4.6",
+        title="Chilled Water Cooling Coil Detailed Engineering Report v2.4.7",
     )
 
     pframe = Frame(15 * mm, 15 * mm, psize[0] - 30 * mm, psize[1] - 30 * mm, id="portrait_frame")
@@ -285,7 +285,7 @@ def build_pdf(inputs: dict, result: dict, target: dict | None, warnings: list[st
     def footer(canvas, d):
         canvas.saveState()
         canvas.setFont("Helvetica", 7)
-        canvas.drawString(15 * mm, 7 * mm, "Chilled Water Cooling Coil Designer v2.4.6")
+        canvas.drawString(15 * mm, 7 * mm, "Chilled Water Cooling Coil Designer v2.4.7")
         canvas.drawRightString(canvas._pagesize[0] - 15 * mm, 7 * mm, f"Page {d.page}")
         canvas.restoreState()
 
@@ -301,7 +301,7 @@ def build_pdf(inputs: dict, result: dict, target: dict | None, warnings: list[st
     styles.add(ParagraphStyle(name="Tiny", parent=styles["BodyText"], fontSize=7, leading=8.5, spaceAfter=2))
 
     story = [
-        Paragraph("Chilled Water Cooling Coil Detailed Engineering Report - v2.4.6", styles["TitleC"]),
+        Paragraph("Chilled Water Cooling Coil Detailed Engineering Report - v2.4.7", styles["TitleC"]),
         Paragraph(f"Prepared by user: {_safe(username)}", styles["Smallx"]),
         Paragraph(
             "Physical flow geometry: CROSS-FLOW (air perpendicular to tube/coolant direction). "
@@ -333,7 +333,8 @@ def build_pdf(inputs: dict, result: dict, target: dict | None, warnings: list[st
         ["Coolant / concentration", f"{inputs.get('coolant', '')} / {inputs.get('glycol_pct', 0):.1f}%"],
         ["Coolant inlet / pressure", f"{inputs.get('water_in_C', 0):.2f} degC / {inputs.get('water_pressure_kPa_abs', 0):.1f} kPa abs"],
         ["Coolant mass flow / circuits", f"{inputs.get('water_mdot_kg_s', 0):.4f} kg/s / {inputs.get('circuits', '')}"],
-        ["Coolant volume flow", f"{inputs.get('water_volume_m3_h', 0):.4f} m3/h"],
+        ["Coolant volume flow", f"{inputs.get('water_volume_m3_h', 0):.4f} m3/h = {inputs.get('water_volume_L_s', inputs.get('water_volume_m3_h',0)/3.6):.4f} L/s"],
+        ["Coolant flow input unit", inputs.get("water_flow_input_unit", "Volume flow (m3/h)")],
         ["Suggested start tube velocity", f"{inputs.get('suggested_tube_velocity_m_s', 1.0):.3f} m/s"],
         ["Suggested start coolant flow", f"{inputs.get('suggested_water_volume_m3_h', 0):.4f} m3/h = {inputs.get('suggested_water_L_s', 0):.4f} L/s = {inputs.get('suggested_water_mdot_kg_s', 0):.4f} kg/s"],
         ["Approx tube velocity from entered flow", f"{inputs.get('actual_input_tube_velocity_m_s', 0):.3f} m/s"],
@@ -415,7 +416,8 @@ def build_pdf(inputs: dict, result: dict, target: dict | None, warnings: list[st
         ["Air Re / Pr", f"{result['air_corr']['Re_air']:.0f} / {result['air_corr']['Pr_air']:.3f}"],
         ["Air-side h", f"{result['air_corr'].get('h_air_W_m2K',0):.2f} W/m2.K"],
         ["Air-side Colburn j / friction f", f"{result['air_corr'].get('j',0):.6f} / {result['air_corr'].get('f_air',0):.6f}"],
-        ["Dry core air dP before wet factor", f"{result['air_corr'].get('dp_air_dry_Pa',0):.2f} Pa"],
+        ["Segmented dry air dP before wet factor", f"{result.get('air_dp_dry_segmented_Pa', result['air_corr'].get('dp_air_dry_Pa',0)):.2f} Pa"],
+        ["Final wet-coil air dP", f"{result.get('air_dp_Pa',0):.2f} Pa"],
         ["Coolant Re / Pr", f"{result['water_ht']['Re_water']:.0f} / {result['water_ht']['Pr_water']:.3f}"],
         ["Water-side h", f"{result['water_ht'].get('h_water_W_m2K',0):.2f} W/m2.K"],
         ["Water Darcy friction factor", f"{result['water_ht'].get('f_water',0):.6f}"],
@@ -431,7 +433,7 @@ def build_pdf(inputs: dict, result: dict, target: dict | None, warnings: list[st
             ["Thermal model", result.get("thermal_model", "")],
             ["2-D thermal convergence", f"{result.get('tube2d_converged')} / {result.get('tube2d_iterations', 0)} iterations"],
             ["Thermal/hydraulic outer iterations", result.get("tube2d_hydraulic_outer_iterations", 0)],
-            ["Energy-balance error", f"{result.get('energy_balance_error_pct', 0):.4f}%"],
+            ["Internal 2-D solver balance error", f"{result.get('energy_balance_error_pct', 0):.4f}%"],
         ])
     story.append(KeepTogether([Paragraph("Heat Transfer Diagnostics", styles["H2x"]), _table(diag_rows, [67 * mm, 108 * mm])]))
     story.append(Spacer(1, 8))
@@ -462,9 +464,16 @@ def build_pdf(inputs: dict, result: dict, target: dict | None, warnings: list[st
     ]
     htab = hyd.get("table")
     if htab is not None and len(htab):
+        component_means = {}
         for key,label in [("Core_bends_branch_dP_kPa","Core + bends + branch dP avg"),("Supply_header_dP_kPa","Supply-header dP avg"),("Return_header_dP_kPa","Return-header dP avg")]:
             if key in htab.columns:
-                hyd_rows.append([label, f"{float(htab[key].mean()):.3f} kPa"])
+                val = float(htab[key].mean())
+                component_means[key] = val
+                hyd_rows.append([label, f"{val:.3f} kPa"])
+        known = sum(component_means.values())
+        common_dp = max(float(hyd.get('dp_total_avg_kPa',0)) - known, 0.0)
+        hyd_rows.append(["Common inlet + outlet fitting dP avg", f"{common_dp:.3f} kPa"])
+        hyd_rows.append(["Component sum check", f"{known + common_dp:.3f} kPa"])
     story.append(KeepTogether([Paragraph("Hydraulic Pressure-Drop Breakdown", styles["H2x"]), _table(hyd_rows,[78*mm,97*mm])]))
     story.append(Spacer(1, 8))
 
@@ -558,18 +567,18 @@ def build_pdf(inputs: dict, result: dict, target: dict | None, warnings: list[st
             ])
         story.append(_table(data, [12*mm, 12*mm, 21*mm, 18*mm, 18*mm, 20*mm, 20*mm, 20*mm, 17*mm, 15*mm], font=6.2, repeat=1))
         story += [PageBreak(), Paragraph("Tube-by-Tube Local Heat-Transfer / Flow Diagnostics", styles["H2x"])]
-        d2 = [["Ckt","Seq","Tube","v water","Re water","Pr water","Re air","Pr air","Air vmax","Cell dP","UA dry"]]
+        d2 = [["Ckt","Seq","Tube","v water","Re water","Pr water","Re air","Pr air","Air vmax","Dry dP","Wet dP","UA dry"]]
         for _, rr in cell_df.iterrows():
             d2.append([
                 int(rr.get('Circuit',0)), int(rr.get('Sequence',0)), rr.get('Tube',''),
                 f"{rr.get('Tube_velocity_m_s',0):.3f}", f"{rr.get('Re_water',0):.0f}", f"{rr.get('Pr_water',0):.3f}",
                 f"{rr.get('Re_air',0):.0f}", f"{rr.get('Pr_air',0):.3f}", f"{rr.get('Air_max_velocity_m_s',0):.3f}",
-                f"{rr.get('Air_dP_cell_Pa',0):.3f}", f"{rr.get('UA_dry_W_K',0):.2f}",
+                f"{rr.get('Air_dP_dry_cell_Pa',0):.3f}", f"{rr.get('Air_dP_cell_Pa',0):.3f}", f"{rr.get('UA_dry_W_K',0):.2f}",
             ])
-        story.append(_table(d2,[11*mm,11*mm,20*mm,17*mm,18*mm,16*mm,17*mm,15*mm,17*mm,17*mm,18*mm],font=5.8,repeat=1))
+        story.append(_table(d2,[9*mm,9*mm,17*mm,14*mm,14*mm,13*mm,14*mm,12*mm,14*mm,13*mm,13*mm,13*mm],font=5.5,repeat=1))
         story.append(Spacer(1, 4))
         story.append(Paragraph(
-            "Model assumption: equal entering dry-air mass flow per vertical tube lane. Lateral air redistribution and cross-fin conduction between adjacent tubes are not included in v2.4.5.",
+            "Model assumption: equal entering dry-air mass flow per vertical tube lane. Lateral air redistribution and cross-fin conduction between adjacent tubes are not included in v2.4.7.",
             styles["Tiny"],
         ))
 
@@ -605,7 +614,7 @@ def build_pdf(inputs: dict, result: dict, target: dict | None, warnings: list[st
         "Plain fins use the Wang, Chi & Chang (2000) plain fin j/f correlation. Wavy+louvered fins use the Wang-Tsai-Lu correlation as documented by ACHP.",
         "Wavy-only mode is deliberately labelled a calibration-required baseline rather than inventing unverified correlation coefficients.",
         "Water-side heat transfer uses Gnielinski with transition treatment; tube/header pressure loss uses Darcy-Weisbach with Churchill friction.",
-        "With a complete circuit map, v2.4.5 uses a fully coupled tube-by-tube / air-lane model. Each tube cell receives its own entering coolant temperature and resolved circuit flow and feeds its outlet states to the next coolant pass and next air row.",
+        "With a complete circuit map, v2.4.7 uses a fully coupled tube-by-tube / air-lane model. Each tube cell receives its own entering coolant temperature and resolved circuit flow and feeds its outlet states to the next coolant pass and next air row.",
         "Unequal circuit pass counts are allowed when each circuit retains the required same-end/even or opposite-end/odd outlet parity. The explicit hydraulic solver calculates the resulting flow maldistribution rather than assuming equal flow.",
         "The 2-D model assumes equal entering dry-air mass flow among vertical lanes and does not yet include lateral cross-fin conduction between adjacent tubes; these are explicit higher-order refinements.",
         "Validate air HTC, wet air dP and fitting K values against actual coil test or trusted manufacturer data before production release.",

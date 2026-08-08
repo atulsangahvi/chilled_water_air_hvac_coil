@@ -1,5 +1,13 @@
 
-## v2.4.6 coolant-flow starting suggestion and expanded reports
+
+### v2.4.7 updates
+- Coolant flow may be entered directly as **m3/h**, **L/s**, or **kg/s**.
+- The 1 m/s starting-flow suggestion remains informational; all calculations use the user-entered flow.
+- Basic Output Report tube ID is corrected to use the actual tube ID (OD - 2 x wall).
+- Detailed report hydraulic breakdown now includes the common inlet/outlet fitting loss and a component-sum check.
+- Detailed report air-pressure-drop diagnostic now distinguishes segmented dry dP from final wet-coil dP.
+- Report version labels are synchronized to v2.4.7.
+## v2.4.7 coolant-flow units and report corrections
 
 - The user selects coolant, concentration, entering temperature, pressure and the number of parallel circuits before entering coolant flow.
 - The app proposes a starting total coolant flow from the actual tube ID, number of parallel circuits and a user-adjustable target tube velocity (default 1.0 m/s).
@@ -265,10 +273,3 @@ The PDF report includes the physical circuit map, circuit hydraulic table, and c
 - Fixed the fully coupled tube-by-tube solver intermediate-air-state crash (`KeyError: Vda_m3_kgda`).
 - `air_state_from_T_W()` now returns the same complete core psychrometric fields as the DB+RH and DB+WB constructors, including humid-air specific volume and density.
 - Added a defensive specific-volume fallback inside `tube2d.py` and regression tests for both the normal and fallback paths.
-
-
-## Role-based downloads
-
-- **admin**: may download the standard **Output Report (PDF)**, the **Detailed Engineering Report (PDF)**, detailed JSON, row-by-row CSV, tube-by-tube thermal CSV, circuit hydraulics CSV, and circuit-route CSV/JSON files.
-- **engineer1 / engineer2**: may download only the standard **Output Report (PDF)**. Detailed engineering and raw data exports are restricted to the admin account.
-- The standard report name in the app is **Output Report**.

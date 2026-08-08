@@ -8,7 +8,7 @@ import pandas as pd
 import streamlit as st
 
 st.set_page_config(
-    page_title="Chilled Water Cooling Coil Designer v2.4.6",
+    page_title="Chilled Water Cooling Coil Designer v2.4.7",
     page_icon="💧",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -58,10 +58,10 @@ with st.sidebar:
     if st.button("Logout", use_container_width=True):
         logout()
     st.divider()
-    st.caption("Engineering model v2.4.6 - fully coupled tube-by-tube thermal + physical circuiting")
+    st.caption("Engineering model v2.4.7 - fully coupled tube-by-tube thermal + physical circuiting")
     st.caption("Air crosses the tube axes; water connection side only changes row progression.")
 
-st.title("💧 Chilled Water Cooling Coil Designer v2.4.6")
+st.title("💧 Chilled Water Cooling Coil Designer v2.4.7")
 st.caption(
     "Wet/dry cooling - row-by-row air and coolant temperatures - air/water dP - "
     "target checking - multi-user Streamlit"
@@ -257,21 +257,34 @@ with input_tab:
         "This is only a starting recommendation; edit the actual flow below as required."
     )
 
-    water_input = st.selectbox("Coolant flow input", ["Volume flow (m3/h)", "Mass flow (kg/s)"], index=0)
+    water_input = st.selectbox(
+        "Coolant flow input",
+        ["Volume flow (m3/h)", "Volume flow (L/s)", "Mass flow (kg/s)"],
+        index=0,
+        help="Choose the unit you normally receive from the project data. The app converts it internally and all calculations use the entered flow.",
+    )
     if water_input == "Mass flow (kg/s)":
         default_mass = float(st.session_state.get("cw_mass_flow_input", suggested_mdot_kg_s))
         mdot_w = st.number_input("Total coolant mass flow (kg/s)", 0.02, 200.0, default_mass, 0.01, key="cw_mass_flow_input")
         Vw_m3h = mdot_w / max(rho_ui, 1e-12) * 3600.0
+        Vw_L_s = Vw_m3h / 3.6
+    elif water_input == "Volume flow (L/s)":
+        default_L_s = float(st.session_state.get("cw_volume_flow_L_s_input", suggested_L_s))
+        Vw_L_s = st.number_input("Total coolant volume flow (L/s)", 0.01, 300.0, default_L_s, 0.01, key="cw_volume_flow_L_s_input")
+        Vw_m3h = Vw_L_s * 3.6
+        mdot_w = (Vw_L_s / 1000.0) * rho_ui
     else:
         default_vol = float(st.session_state.get("cw_volume_flow_input", suggested_Vdot_m3_h))
         Vw_m3h = st.number_input("Total coolant volume flow (m3/h)", 0.05, 1000.0, default_vol, 0.05, key="cw_volume_flow_input")
+        Vw_L_s = Vw_m3h / 3.6
         mdot_w = (Vw_m3h / 3600.0) * rho_ui
 
     actual_tube_velocity_ui = (mdot_w / max(rho_ui, 1e-12)) / max(int(circuits) * tube_flow_area_ui, 1e-12)
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Actual entered volume flow", f"{Vw_m3h:.3f} m3/h")
-    c2.metric("Approx coolant mass flow / circuit", f"{mdot_w/int(circuits):.4f} kg/s")
-    c3.metric("Approx tube velocity from entered flow", f"{actual_tube_velocity_ui:.3f} m/s")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Entered coolant flow", f"{Vw_m3h:.3f} m3/h")
+    c2.metric("Equivalent flow", f"{Vw_L_s:.3f} L/s")
+    c3.metric("Mass flow / circuit", f"{mdot_w/int(circuits):.4f} kg/s")
+    c4.metric("Approx tube velocity", f"{actual_tube_velocity_ui:.3f} m/s")
 
     circuit_connection_style = st.selectbox(
         "Circuit supply/return tube-end arrangement",
@@ -454,7 +467,7 @@ with input_tab:
                 )
 
             inp = {
-                "version": "2.4.6",
+                "version": "2.4.7",
                 "customer_name": customer_name, "contact_name": contact_name,
                 "project_name": project_name, "reference": reference,
                 "tag_description": tag_description, "coil_quantity": int(coil_quantity),
@@ -987,7 +1000,7 @@ Air is marched serially from the entering face to the leaving face. For water en
 
 ### Physical circuiting editor
 
-v2.4.6 uses the manufacturing circuit map directly in the thermal solution. A tube is identified by row and vertical position, for example `R6-T1`. A circuit is an ordered list of tube passes joined by return bends. The app checks duplicate/missing tubes, each circuit's pass count, same-end/even-pass and opposite-end/odd-pass compatibility, and long bend spans. **Equal pass counts are preferred but are not required.** A complete route activates the circuit-resolved header/friction network and the fully coupled tube-by-tube thermal solver.
+v2.4.7 uses the manufacturing circuit map directly in the thermal solution. A tube is identified by row and vertical position, for example `R6-T1`. A circuit is an ordered list of tube passes joined by return bends. The app checks duplicate/missing tubes, each circuit's pass count, same-end/even-pass and opposite-end/odd-pass compatibility, and long bend spans. **Equal pass counts are preferred but are not required.** A complete route activates the circuit-resolved header/friction network and the fully coupled tube-by-tube thermal solver.
 
 When a complete route is defined, the app switches to a fully coupled tube-by-tube / air-lane iteration. Each R#-T# cell receives the local air state from the previous row and the local coolant temperature from the previous tube in its circuit. The cell is solved as a local cross-flow wet/dry heat exchanger; both outlet states are then propagated and the whole grid is iterated to convergence. Unequal circuit lengths are allowed when every circuit retains the required even/odd outlet-end parity. The hydraulic network calculates the resulting unequal flows instead of assuming equal distribution.
 

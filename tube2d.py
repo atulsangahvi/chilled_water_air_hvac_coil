@@ -275,6 +275,7 @@ def _assemble_tables(
                 "Pr_air": float(rr["air_corr"]["Pr_air"]),
                 "Air_max_velocity_m_s": float(rr["air_corr"]["u_max_m_s"]),
                 "Air_dP_cell_Pa": float(rr["air_dp_Pa"]),
+                "Air_dP_dry_cell_Pa": float(rr["air_corr"].get("dp_air_dry_Pa", 0.0)),
                 "UA_dry_W_K": float(rr["UA_dry_W_K"]),
             })
         last = cell_results[route[-1]]
@@ -477,6 +478,12 @@ def coupled_tube_by_tube_performance(
 
     row_table = grid["row_table"]
     row_air_dp = float(row_table["Air_dP_Pa"].sum())
+    # For a 2-D segmented model, the directly comparable dry pressure drop is the
+    # sum of the mean local dry cell drops across successive air rows.
+    if "Air_dP_dry_cell_Pa" in cell_table.columns:
+        row_air_dp_dry = float(cell_table.groupby("Row")["Air_dP_dry_cell_Pa"].mean().sum())
+    else:
+        row_air_dp_dry = float(baseline.get("air_corr", {}).get("dp_air_dry_Pa", 0.0))
     wet_fraction = float(cell_table["Wet_fraction_pct"].mean() / 100.0)
     modes = set(cell_table["Surface_mode"])
     if modes == {"Dry"}:
@@ -553,6 +560,7 @@ def coupled_tube_by_tube_performance(
         "wet_fraction": wet_fraction,
         "surface_mode": surface,
         "air_dp_Pa": row_air_dp,
+        "air_dp_dry_segmented_Pa": row_air_dp_dry,
         "UA_dry_W_K": UA_total,
         "mdot_da_kg_s": mdot_da,
         "row_table": row_table,
