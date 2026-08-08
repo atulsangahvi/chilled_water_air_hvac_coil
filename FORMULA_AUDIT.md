@@ -91,13 +91,11 @@ For every parallel circuit, the app calculates:
 
 where:
 
-- the simple row-bank fallback starts from equal flow;
-- a complete physical circuit map activates an explicit parallel-path network;
-- unequal route lengths are allowed when each circuit satisfies the required outlet-end parity;
-- actual circuit tube length follows its own pass count;
+- each circuit gets total flow / number of circuits for the first equal-flow solution;
+- integer tube counts are distributed between circuits;
+- actual circuit tube length follows its tube count;
 - every tube-to-tube return bend contributes a configurable `K`;
-- circuit takeoff/return minor-loss `K` is configurable;
-- explicit mapped-circuit flows are iterated toward common parallel-path pressure loss.
+- circuit takeoff/return minor-loss `K` is configurable.
 
 The app reports individual circuit path losses instead of only one averaged number.
 
@@ -120,7 +118,7 @@ Header flow is reduced/accumulated segment-by-segment as branches leave or enter
 - maximum circuit-path ΔP;
 - pressure spread between paths.
 
-For the row-bank fallback, a large path spread warns that equal flow may be inconsistent. With a complete physical route, v2.4 uses the explicit circuit network and iterates unequal circuit flows directly; circuit-specific mean temperature properties are fed back to the hydraulic calculation.
+A large path spread triggers a warning because the initial equal-flow assumption is then internally inconsistent. A later production phase can add a nonlinear hydraulic network solver to solve unequal circuit flows directly.
 
 ## 9. Wet/dry thermal calculation
 
@@ -133,7 +131,7 @@ The model first solves a dry coil and estimates surface temperatures. If the sur
 - energy balance for total load and leaving coolant temperature;
 - psychrometric inversion for leaving DB/RH/WB and humidity ratio.
 
-This is conceptually consistent with the established ACHP/EnergyPlus family of wet/dry coil methods. In the row-bank fallback it is applied row-by-row. With a complete physical circuit map, v2.4 applies the same local wet/dry cell calculation tube-by-tube in a coupled 2-D air-lane/circuit network.
+This is conceptually consistent with the established ACHP/EnergyPlus family of wet/dry coil methods. It is not a CFD or tube-by-tube circuit solver.
 
 ## 10. What still needs manufacturer validation
 
@@ -215,12 +213,3 @@ inventing coefficients.
 
 Final production work should replace generic conductivity values with the actual alloy/temper
 or material specification when known.
-
-
-## 12. v2.4 fully coupled tube-by-tube model
-
-When the physical circuit map is complete, the computational state is defined at every `R#-T#` tube cell rather than by one mean coolant temperature per row. The local cell receives its own entering air state, entering coolant temperature and circuit flow. The leaving air is propagated downstream in the same vertical air lane; the leaving coolant is propagated to the next tube in the routed circuit. Fixed-point iteration closes the crossed air/coolant network.
-
-Unequal pass counts are permitted. For a common same-end header arrangement every circuit must remain even-pass; for a common opposite-end arrangement every circuit must remain odd-pass. Therefore practical unequal banks commonly use pass counts separated by two. If the physical tube total cannot satisfy the selected parity, the manufacturing solution may require a changed circuit count, special crossover/header geometry, or blank/dropped tubes.
-
-The 2-D model currently assumes uniform entering dry-air mass flow per vertical tube lane and neglects lateral air redistribution and cross-fin conduction. Those assumptions are explicit and should be validated for the intended coil geometry.

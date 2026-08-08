@@ -191,7 +191,8 @@ continue on page 2, and it described the row arrangement simply as `Counterflow`
 - places the row-by-row thermal-marching table on a **landscape A4 page** so readable fonts
   can be retained.
 
-The PDF generator includes dedicated landscape pages for physical circuiting and tube-by-tube thermal results when a complete route is available.
+`sample_report_v2_3.pdf` is included so the revised report layout can be reviewed without
+running CoolProp locally.
 
 ## v2.3 - Physical circuiting editor
 
@@ -243,26 +244,15 @@ When every tube is assigned and the route is valid, the analysis changes from th
 
 Outputs include circuit mass flow, deviation from equal flow, tube velocity, Reynolds number, core/bend/branch pressure drop, supply-header loss, return-header loss, total circuit-path loss, and maximum flow imbalance.
 
-### Tube-by-tube thermal model
+### Tube-by-tube coolant temperature post-processor
 
-The v2.3 row-duty-conserving coolant-temperature post-processor has been superseded by the v2.4 fully coupled 2-D solver described below. The physical circuit map is still used for the hydraulic network and PDF circuit drawing.
+For a complete circuit map, the app also reconstructs coolant temperature through every tube pass. v2.3 conserves the converged row-bank heat duty, divides each row duty among the tubes in that row, then marches those tube duties through the calculated circuit flows.
 
-The PDF report includes the physical circuit map, circuit hydraulic table, circuit outlet temperatures, and tube-by-tube thermal results when a complete circuit route is defined.
+This is deliberately labelled as a **row-duty-conserving circuit temperature post-processor**. It exposes circuit outlet-temperature and flow imbalance and is useful for manufacturing review, but it does not yet feed the different individual circuit temperatures back into every local tube heat-transfer calculation. A fully coupled 2-D air/circuit thermal network is the next possible refinement.
 
-## v2.4 - Unequal circuits and fully coupled tube-by-tube / air-lane solve
+The PDF report includes the physical circuit map, circuit hydraulic table, and circuit outlet temperatures when a complete circuit route is defined.
 
-Real coil blocks do not always divide into identical circuit lengths. v2.4 therefore distinguishes **preferred equal circuits** from **acceptable unequal circuits**. Unequal routes are allowed when each route exits at the intended header end. With same-end supply/return this normally means every route remains even-pass; with opposite-end connections every route remains odd-pass. Consequently, unequal routes commonly differ by two straight passes (for example 16 and 18), not by one. If the total tube count cannot satisfy the required parity, manufacturing practice may require a blank/dropped tube or a special crossover/header arrangement.
-
-When the selected geometry can use all tubes with the required outlet-end parity, the automatic circuit generator deliberately distributes the longer routes across the face. The explicit hydraulic network then solves the parallel flows toward equal path pressure loss instead of forcing equal mass flow.
-
-With a complete physical circuit map, the thermal solver is no longer a row-average post-processor. The coil is discretized as `R#-T#` cells. For every cell the solver uses:
-
-- local entering air state from the previous row in that vertical air lane;
-- local entering coolant temperature from the previous tube in that circuit;
-- the individually solved circuit mass flow;
-- local cross-flow dry/part-wet/wet heat transfer;
-- local tube-side Reynolds/Prandtl/HTC and air-side state/properties.
-
-The leaving air from each cell becomes the entering air to the next row in that lane, while the leaving coolant becomes the entering coolant to the next tube in the routed circuit. The entire air/coolant grid is iterated to convergence. The familiar row-by-row table remains, but it is now an **aggregate of the individual tube/air-lane solutions**, not the state used to solve every tube in a row.
-
-Remaining explicit refinements are lateral air redistribution among vertical lanes and cross-fin conduction between adjacent tube cells. Those effects should be considered during later validation against actual coil test data.
+## v2.4.1 hotfix
+- Fixed DB + WB leaving-air target mode: `target_load_db_wb()` now correctly uses its `Vdot_m3_s` argument.
+- Added a regression test for DB + WB target-load calculation.
+- Included the hardened multi-user `auth.py` supporting either private Streamlit Secrets `password` values or valid bcrypt `password_hash` values.

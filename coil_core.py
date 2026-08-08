@@ -1027,7 +1027,7 @@ def segmented_thermal_performance(
 def target_load_db_wb(air_in: AirCondition, air_out_db_C: float, air_out_wb_C: float, Vdot_m3_s: float) -> Dict[str, float]:
     ain = air_state_from_db_rh(air_in.db_C, air_in.rh_pct, air_in.pressure_Pa)
     aout = air_state_from_db_wb(air_out_db_C, air_out_wb_C, air_in.pressure_Pa)
-    mdot_da = air_volume_flow_m3_s / ain["Vda_m3_kgda"]
+    mdot_da = Vdot_m3_s / ain["Vda_m3_kgda"]
     Q = mdot_da * (ain["h_J_kgda"] - aout["h_J_kgda"])
     Qs = mdot_da * ain["cp_da"] * (air_in.db_C - air_out_db_C)
     return {"Q_required_kW": Q / 1000.0, "Q_sensible_required_kW": Qs / 1000.0,
