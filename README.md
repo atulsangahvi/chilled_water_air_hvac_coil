@@ -1,3 +1,9 @@
+# v2.5.1: clickable circuit drawing and in-tab routed analysis
+
+- Select an active circuit and click its tube circles directly in the circuit cross-section to construct an ordered physical route. Click the last tube again to undo. The existing button matrix, text entry, and automatic serpentine generator remain available.
+- A complete, valid circuit map enables **Run analysis using these circuits** on the Circuiting tab. The coupled tube-by-tube thermal and parallel hydraulic calculations use the exact selected tube order. Change routes and rerun to compare circuit arrangements.
+- Streamlit 1.51 or later is required for clicks on the circuit drawing; the button matrix remains as a fallback. All existing inputs, result views, reports and modules remain available.
+
 # v2.5: condenser-aligned tube and fin geometry
 
 - Tube axis runs along coil face width; vertical tube pitch determines tubes per row; row pitch determines coil depth. The fin count and areas are calculated by the same geometry module as the corrected condenser/evaporator model. FPI counts plates for plate fins and inclined legs for serpentine fins.

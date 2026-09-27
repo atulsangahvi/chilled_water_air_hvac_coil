@@ -395,7 +395,7 @@ def circuit_svg(
             c = owner.get(label)
             fill = palette[(c-1) % len(palette)] if c else "#ffffff"
             stroke = palette[(c-1) % len(palette)] if c else "#64748b"
-            parts.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="6" fill="{fill}" stroke="{stroke}" stroke-width="1.5"/>')
+            parts.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="7" fill="{fill}" stroke="{stroke}" stroke-width="1.5" data-tube="{label}" tabindex="0" role="button"><title>{label}: {"Circuit " + str(c) if c else "unassigned"}</title></circle>')
             if c:
                 parts.append(f'<text x="{x:.1f}" y="{y+3.2:.1f}" text-anchor="middle" font-size="7.5" fill="white" font-weight="700">{c}</text>')
 

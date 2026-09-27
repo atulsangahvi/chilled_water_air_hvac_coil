@@ -8,7 +8,7 @@ import pandas as pd
 import streamlit as st
 
 st.set_page_config(
-    page_title="Chilled Water Cooling Coil Designer v2.5",
+    page_title="Chilled Water Cooling Coil Designer v2.5.1",
     page_icon="💧",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -40,6 +40,9 @@ from circuiting import (
     tube_id,
     validate_routes,
 )
+from circuit_picker import apply_tube_click, register_clickable_svg
+
+CLICKABLE_CIRCUIT_SVG = register_clickable_svg()
 
 CFM_TO_M3S = 0.00047194745
 MATERIAL_K = {
@@ -61,10 +64,10 @@ with st.sidebar:
     if st.button("Logout", use_container_width=True):
         logout()
     st.divider()
-    st.caption("Engineering model v2.5 - fully coupled tube-by-tube thermal + physical circuiting")
+    st.caption("Engineering model v2.5.1 - fully coupled tube-by-tube thermal + physical circuiting")
     st.caption("Air crosses the tube axes; water connection side only changes row progression.")
 
-st.title("💧 Chilled Water Cooling Coil Designer v2.5")
+st.title("💧 Chilled Water Cooling Coil Designer v2.5.1")
 st.caption(
     "Wet/dry cooling - row-by-row air and coolant temperatures - air/water dP - "
     "target checking - multi-user Streamlit"
@@ -425,7 +428,8 @@ with input_tab:
         bend_K, branch_K, entry_K, exit_K,
     )
 
-    if st.button("🚀 Run chilled-water coil analysis", type="primary", use_container_width=True):
+    run_from_circuit_tab = st.session_state.pop("run_from_circuit_tab", False)
+    if st.button("🚀 Run chilled-water coil analysis", type="primary", use_container_width=True) or run_from_circuit_tab:
         try:
             routes_now = {int(k): list(v) for k, v in st.session_state.get("circuit_routes", {}).items()}
             route_signature_now = json.dumps({str(k): v for k, v in sorted(routes_now.items())}, sort_keys=True)
@@ -494,7 +498,7 @@ with input_tab:
                 )
 
             inp = {
-                "version": "2.5",
+                "version": "2.5.1",
                 "customer_name": customer_name, "contact_name": contact_name,
                 "project_name": project_name, "reference": reference,
                 "tag_description": tag_description, "coil_quantity": int(coil_quantity),
@@ -601,15 +605,35 @@ with circuit_tab:
     for warn in v["warnings"][:6]:
         st.warning(warn)
 
-    st.markdown("#### Circuit side-view / airflow-depth preview")
-    st.markdown(circuit_svg(int(rows), tubes_per_row_ui, routes), unsafe_allow_html=True)
+    selected_circuit = st.selectbox("Active circuit", list(range(1, int(circuits)+1)), key="active_circuit")
+    st.markdown("#### Click tubes in the circuit drawing")
+    st.caption("Choose an active circuit, then click each circle in water-flow order. Click the last selected circle again to undo that pass. Coloured paths update as you work.")
+    drawing = circuit_svg(int(rows), tubes_per_row_ui, routes)
+    if CLICKABLE_CIRCUIT_SVG is not None:
+        def on_circuit_drawing_click():
+            clicked=st.session_state["cw_clickable_svg"].clicked
+            if clicked:
+                try:
+                    st.session_state["circuit_editor_message"] = apply_tube_click(
+                        st.session_state["circuit_routes"],
+                        st.session_state.get("active_circuit",1),clicked,
+                        int(rows),tubes_per_row_ui,
+                    )
+                except ValueError as exc:
+                    st.session_state["circuit_editor_message"] = str(exc)
+        CLICKABLE_CIRCUIT_SVG(
+            data={"svg":drawing},key="cw_clickable_svg",
+            on_clicked_change=on_circuit_drawing_click,
+        )
+    else:
+        st.markdown(drawing, unsafe_allow_html=True)
+        st.caption("For direct clicks on this drawing, install Streamlit 1.51 or later. The clickable tube matrix below remains available.")
     st.caption(
         "The coloured lines are the ordered circuit route through the row/tube matrix. The drawing is a circuit cross-section; "
         "actual straight tubes run along the face width, perpendicular to this view."
     )
 
     st.markdown("#### Build or edit a circuit")
-    selected_circuit = st.selectbox("Active circuit", list(range(1, int(circuits)+1)), key="active_circuit")
     selected_route = routes[selected_circuit]
     st.code(route_text(selected_route) if selected_route else "No tubes assigned yet", language="text")
 
@@ -659,7 +683,7 @@ with circuit_tab:
                 st.error(str(exc))
 
     if int(rows) <= 12:
-        st.markdown("#### Click-to-route tube matrix")
+        st.markdown("#### Click-to-route tube matrix (alternative editor)")
         st.caption(
             "Click an unassigned dot to append it to the active circuit. A dot already in the active circuit can be removed by clicking it only when it is the last tube in that circuit; this protects route order."
         )
@@ -715,6 +739,13 @@ with circuit_tab:
         })
     summary_df = pd.DataFrame(summary_rows)
     st.dataframe(summary_df, use_container_width=True, hide_index=True, height=320)
+    if st.button("🚀 Run analysis using these circuits",type="primary",
+                 disabled=not (v["valid"] and v["complete"]),
+                 help="A complete, valid route uses every selected tube in the coupled thermal and hydraulic calculation."):
+        st.session_state["run_from_circuit_tab"]=True
+        st.rerun()
+    if not (v["valid"] and v["complete"]):
+        st.caption("Complete every circuit and assign every tube to enable a routed analysis. The Design Inputs run button remains available for the equivalent row model.")
     detail_df = route_geometry_table(routes, Pt_mm*MM, Pl_mm*MM)
     with st.expander("Manufacturing pass / return-bend schedule"):
         st.caption("Bend side alternates automatically because each straight tube pass reverses the water direction along the face width.")
@@ -1035,7 +1066,7 @@ Air is marched serially from the entering face to the leaving face. For water en
 
 ### Physical circuiting editor
 
-v2.5 uses the manufacturing circuit map directly in the thermal solution. A tube is identified by row and vertical position, for example `R6-T1`. A circuit is an ordered list of tube passes joined by return bends. The app checks duplicate/missing tubes, each circuit's pass count, same-end/even-pass and opposite-end/odd-pass compatibility, and long bend spans. **Equal pass counts are preferred but are not required.** A complete route activates the circuit-resolved header/friction network and the fully coupled tube-by-tube thermal solver.
+v2.5.1 uses the manufacturing circuit map directly in the thermal solution. A tube is identified by row and vertical position, for example `R6-T1`. A circuit is an ordered list of tube passes joined by return bends. The app checks duplicate/missing tubes, each circuit's pass count, same-end/even-pass and opposite-end/odd-pass compatibility, and long bend spans. **Equal pass counts are preferred but are not required.** A complete route activates the circuit-resolved header/friction network and the fully coupled tube-by-tube thermal solver.
 
 When a complete route is defined, the app switches to a fully coupled tube-by-tube / air-lane iteration. Each R#-T# cell receives the local air state from the previous row and the local coolant temperature from the previous tube in its circuit. The cell is solved as a local cross-flow wet/dry heat exchanger; both outlet states are then propagated and the whole grid is iterated to convergence. Unequal circuit lengths are allowed when every circuit retains the required even/odd outlet-end parity. The hydraulic network calculates the resulting unequal flows instead of assuming equal distribution.
 

@@ -19,7 +19,7 @@ def test_reference_4row_external_area_projected_basis():
     )
     a = geometry_areas(g)
     # Geometry-only benchmark: no extra wavy developed-area multiplier.
-    assert a["n_fins"] == 519
+    assert a["n_fins"] == 520  # condenser v28.7 nearest-whole-fin convention
     assert a["n_tubes_per_row"] == 22
     assert a["n_tubes_total"] == 88
     assert 44.4 < a["A_fin_m2"] < 44.7

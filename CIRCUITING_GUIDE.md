@@ -1,4 +1,4 @@
-# Physical Water Circuiting Guide - v2.4
+# Physical Water Circuiting Guide - v2.5.1
 
 ## 1. What one dot means
 
@@ -21,7 +21,7 @@ This rule applies independently to every parallel circuit.
 
 ## 3. Unequal circuit lengths are allowed
 
-Equal pass counts are preferred because they reduce hydraulic and temperature maldistribution, but real coil geometry does not always divide exactly. v2.4 therefore permits intentional unequal circuit lengths and solves each route individually.
+Equal pass counts are preferred because they reduce hydraulic and temperature maldistribution, but real coil geometry does not always divide exactly. v2.5.1 therefore permits intentional unequal circuit lengths and solves each route individually.
 
 The important detail is outlet-end parity. With same-end headers, a 16-pass circuit and an 18-pass circuit are both valid because both are even. A 16-pass and 17-pass mixture would put the 17-pass outlet at the opposite tube end unless a special crossover/header arrangement is provided. With opposite-end headers, all routes must similarly remain odd-pass.
 
@@ -30,7 +30,9 @@ If no all-tubes-used distribution can satisfy that parity, practical manufacturi
 ## 4. Three ways to create the circuit map
 
 ### Click-to-route
-Choose the active circuit and click dots in exact coolant-flow order. A tube cannot belong to two circuits.
+Choose the active circuit and click the circles directly in the coloured circuit drawing in exact coolant-flow order. The selected path updates after each click. Click its last circle again to undo that pass. A tube cannot belong to two circuits. The button matrix below the drawing is an alternative editor for coils with up to 12 rows. Use the Undo and Clear controls to revise a route.
+
+When every tube has been assigned and the route passes validation, click **Run analysis using these circuits** on the Circuiting tab. Change the map and run again to compare arrangements. Changing tube geometry or circuit count clears the prior map because its tube IDs or parallel branch count may no longer match.
 
 ### Numerical route
 Enter `R#-T#` IDs directly, for example `R6-T1 -> R5-T1 -> R4-T2 -> R3-T2`.
@@ -46,7 +48,7 @@ This is why an unequal route is not automatically rejected: its real consequence
 
 ## 6. Fully coupled tube-by-tube thermal solve
 
-v2.4 does **not** assign one common coolant temperature to every tube in a row. Each `R#-T#` cell has its own local state.
+v2.5.1 does **not** assign one common coolant temperature to every tube in a row. Each `R#-T#` cell has its own local state.
 
 For each tube cell:
 
@@ -61,4 +63,4 @@ Because coolant and air paths cross, the full grid is iterated until local coola
 
 ## 7. Remaining model assumptions
 
-The v2.4 2-D model assumes equal entering dry-air mass flow among the vertical lanes and does not yet model lateral air redistribution or cross-fin conduction between adjacent tubes. These are explicit later refinements and should be assessed during validation against actual coil tests.
+The v2.5.1 2-D model assumes equal entering dry-air mass flow among the vertical lanes and does not yet model lateral air redistribution or cross-fin conduction between adjacent tubes. These are explicit later refinements and should be assessed during validation against actual coil tests.
