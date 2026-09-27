@@ -193,14 +193,19 @@ def build_output_pdf(inputs: dict, result: dict, target: dict | None, username: 
 
     coil_rows = [
         ["Coil Data", "Value"],
-        ["Finned height", f"{float(inputs.get('face_height_m',0))*1000:.1f} mm"],
-        ["Finned length", f"{float(inputs.get('face_width_m',0))*1000:.1f} mm"],
+        ["Coil face height", f"{float(inputs.get('face_height_m',0))*1000:.1f} mm"],
+        ["Coil face width / tube length", f"{float(inputs.get('face_width_m',0))*1000:.1f} mm"],
         ["Rows deep", inputs.get("rows", "")],
         ["Number of feeds / circuits", inputs.get("circuits", "")],
+        ["Tube cross-section / fin construction", f"{inputs.get('tube_shape','Round tube')} / {inputs.get('fin_construction','Plate fins')}"],
+        ["Tube major / minor outside axes", f"{inputs.get('tube_OD_mm',0):.2f} / {inputs.get('tube_minor_axis_mm',inputs.get('tube_OD_mm',0)):.2f} mm"],
         ["Number of passes", passes_text],
         ["Fins per inch", f"{float(inputs.get('FPI',0)):.1f}"],
         ["Tube material", f"{inputs.get('tube_material','')} - wall {float(inputs.get('tube_wall_mm',0)):.3f} mm"],
-        ["Tube diameter", f"OD {float(inputs.get('tube_OD_mm',0)):.3f} mm / ID {float(g.get('Di_m', (float(inputs.get('tube_OD_mm',0))-2.0*float(inputs.get('tube_wall_mm',0)))/1000.0))*1000:.3f} mm"],
+        ["Tube outside major / minor axes", f"{float(inputs.get('tube_OD_mm',0)):.3f} / {float(inputs.get('tube_minor_axis_mm', inputs.get('tube_OD_mm',0))):.3f} mm"],
+        ["Tube inside hydraulic diameter", f"{float(g.get('Di_m', 0))*1000:.3f} mm"],
+        ["Fin count / tubes per row / total tubes", f"{g.get('n_fins',0)} / {g.get('n_tubes_per_row',0)} / {g.get('n_tubes_total',0)}"],
+        ["Net fin / exposed tube area", f"{float(g.get('A_fin_m2',0)):.3f} / {float(g.get('A_bare_m2',0)):.3f} m2"],
         ["Fin material", f"{inputs.get('fin_material','')} - {float(inputs.get('fin_thickness_mm',0)):.3f} mm"],
         ["Fin surface", inputs.get("fin_type", "")],
         ["Face area", f"{float(g.get('face_area_m2',0)):.3f} m2"],
@@ -276,7 +281,7 @@ def build_pdf(inputs: dict, result: dict, target: dict | None, warnings: list[st
         leftMargin=15 * mm,
         topMargin=15 * mm,
         bottomMargin=15 * mm,
-        title="Chilled Water Cooling Coil Detailed Engineering Report v2.4.7",
+        title="Chilled Water Cooling Coil Detailed Engineering Report v2.5",
     )
 
     pframe = Frame(15 * mm, 15 * mm, psize[0] - 30 * mm, psize[1] - 30 * mm, id="portrait_frame")
@@ -285,7 +290,7 @@ def build_pdf(inputs: dict, result: dict, target: dict | None, warnings: list[st
     def footer(canvas, d):
         canvas.saveState()
         canvas.setFont("Helvetica", 7)
-        canvas.drawString(15 * mm, 7 * mm, "Chilled Water Cooling Coil Designer v2.4.7")
+        canvas.drawString(15 * mm, 7 * mm, "Chilled Water Cooling Coil Designer v2.5")
         canvas.drawRightString(canvas._pagesize[0] - 15 * mm, 7 * mm, f"Page {d.page}")
         canvas.restoreState()
 
@@ -301,7 +306,7 @@ def build_pdf(inputs: dict, result: dict, target: dict | None, warnings: list[st
     styles.add(ParagraphStyle(name="Tiny", parent=styles["BodyText"], fontSize=7, leading=8.5, spaceAfter=2))
 
     story = [
-        Paragraph("Chilled Water Cooling Coil Detailed Engineering Report - v2.4.7", styles["TitleC"]),
+        Paragraph("Chilled Water Cooling Coil Detailed Engineering Report - v2.5", styles["TitleC"]),
         Paragraph(f"Prepared by user: {_safe(username)}", styles["Smallx"]),
         Paragraph(
             "Physical flow geometry: CROSS-FLOW (air perpendicular to tube/coolant direction). "
@@ -317,11 +322,12 @@ def build_pdf(inputs: dict, result: dict, target: dict | None, warnings: list[st
         ["Number of tube rows (airflow depth)", inputs.get("rows", "")],
         ["Nominal tube-bank depth", f"{float(inputs.get('rows', 0)) * float(inputs.get('Pl_mm', 0)):.1f} mm"],
         ["Fin type", inputs.get("fin_type", result.get("fin_type", ""))],
+        ["Tube cross-section / fin construction", f"{inputs.get('tube_shape','Round tube')} / {inputs.get('fin_construction','Plate fins')}"],
         ["Fin material", inputs.get("fin_material", "")],
         ["Tube material", inputs.get("tube_material", "")],
         ["FPI / fin pitch", f"{inputs.get('FPI', 0):.1f} 1/in / {inputs.get('fin_pitch_mm', 0):.3f} mm"],
         ["Fin thickness", f"{inputs.get('fin_thickness_mm', 0):.3f} mm"],
-        ["Tube OD / wall", f"{inputs.get('tube_OD_mm', 0):.3f} / {inputs.get('tube_wall_mm', 0):.3f} mm"],
+        ["Tube major / minor OD / wall", f"{inputs.get('tube_OD_mm', 0):.3f} / {inputs.get('tube_minor_axis_mm',inputs.get('tube_OD_mm',0)):.3f} / {inputs.get('tube_wall_mm', 0):.3f} mm"],
         ["Pt / Pl", f"{inputs.get('Pt_mm', 0):.3f} / {inputs.get('Pl_mm', 0):.3f} mm"],
         ["Wave parameter Pd / half-period xf", f"{inputs.get('wave_2a_mm', 0):.3f} / {inputs.get('wave_half_mm', 0):.3f} mm"],
         ["Air HTC / dry dP calibration", f"{inputs.get('air_htc_multiplier', 1):.3f} / {inputs.get('air_dp_multiplier', 1):.3f}"],
@@ -481,6 +487,7 @@ def build_pdf(inputs: dict, result: dict, target: dict | None, warnings: list[st
     geo_rows = [
         ["Calculated geometry", "Value"],
         ["Tube rows in airflow direction", inputs.get("rows", "")],
+        ["Tube and fin orientation", g["orientation"]],
         ["Nominal tube-bank depth", f"{float(inputs.get('rows', 0)) * float(inputs.get('Pl_mm', 0)):.1f} mm"],
         ["Tubes / row", g["n_tubes_per_row"]],
         ["Total tubes", g["n_tubes_total"]],
@@ -489,6 +496,11 @@ def build_pdf(inputs: dict, result: dict, target: dict | None, warnings: list[st
         ["Circuit model", result.get("circuit_model", "Equal-flow circuit-count model")],
         ["Tube length", f"{g['tube_length_m']:.3f} m"],
         ["Fin count", g["n_fins"]],
+        ["Fin construction / serpentine strips", f"{g['fin_construction']} / {g['serpentine_strip_count']}"],
+        ["Fin area per plate / individual strip", f"{g['fin_net_area_each_m2']:.5f} m2 (two sides)"],
+        ["Tube hole count / removed area per plate", f"{g['fin_holes_each']} / {g['fin_hole_area_each_m2']:.5f} m2"],
+        ["Gross tube outside / covered by fins", f"{g['A_tube_outer_full_m2']:.4f} / {g['tube_area_covered_by_fins_m2']:.4f} m2"],
+        ["Tube inner flow area / hydraulic diameter", f"{g['inside_flow_area_m2']:.7f} m2 / {g['Di_m']*1000:.3f} mm"],
         ["Face / free-flow area", f"{g['face_area_m2']:.3f} / {g['free_flow_area_m2']:.3f} m2"],
         ["Free-area ratio", f"{g['free_area_ratio']:.3f}"],
         ["External air-side area (total)", f"{g['A_air_total_m2']:.2f} m2"],
@@ -578,7 +590,7 @@ def build_pdf(inputs: dict, result: dict, target: dict | None, warnings: list[st
         story.append(_table(d2,[9*mm,9*mm,17*mm,14*mm,14*mm,13*mm,14*mm,12*mm,14*mm,13*mm,13*mm,13*mm],font=5.5,repeat=1))
         story.append(Spacer(1, 4))
         story.append(Paragraph(
-            "Model assumption: equal entering dry-air mass flow per vertical tube lane. Lateral air redistribution and cross-fin conduction between adjacent tubes are not included in v2.4.7.",
+            "Model assumption: equal entering dry-air mass flow per vertical tube lane. Lateral air redistribution and cross-fin conduction between adjacent tubes are not included in v2.5.",
             styles["Tiny"],
         ))
 
@@ -614,7 +626,8 @@ def build_pdf(inputs: dict, result: dict, target: dict | None, warnings: list[st
         "Plain fins use the Wang, Chi & Chang (2000) plain fin j/f correlation. Wavy+louvered fins use the Wang-Tsai-Lu correlation as documented by ACHP.",
         "Wavy-only mode is deliberately labelled a calibration-required baseline rather than inventing unverified correlation coefficients.",
         "Water-side heat transfer uses Gnielinski with transition treatment; tube/header pressure loss uses Darcy-Weisbach with Churchill friction.",
-        "With a complete circuit map, v2.4.7 uses a fully coupled tube-by-tube / air-lane model. Each tube cell receives its own entering coolant temperature and resolved circuit flow and feeds its outlet states to the next coolant pass and next air row.",
+        "With a complete circuit map, the app uses a fully coupled tube-by-tube / air-lane model. Each tube cell receives its own entering coolant temperature and resolved circuit flow and feeds its outlet states to the next coolant pass and next air row.",
+        "Flat-tube air-side j/f and serpentine-fin j/f use an equivalent round-tube baseline: geometry, fin count, surface area, free flow and internal hydraulic diameter are calculated from the selected cross section, but capacity and air pressure loss require calibration against the actual core.",
         "Unequal circuit pass counts are allowed when each circuit retains the required same-end/even or opposite-end/odd outlet parity. The explicit hydraulic solver calculates the resulting flow maldistribution rather than assuming equal flow.",
         "The 2-D model assumes equal entering dry-air mass flow among vertical lanes and does not yet include lateral cross-fin conduction between adjacent tubes; these are explicit higher-order refinements.",
         "Validate air HTC, wet air dP and fitting K values against actual coil test or trusted manufacturer data before production release.",

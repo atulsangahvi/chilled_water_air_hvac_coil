@@ -8,7 +8,7 @@ import pandas as pd
 import streamlit as st
 
 st.set_page_config(
-    page_title="Chilled Water Cooling Coil Designer v2.4.7",
+    page_title="Chilled Water Cooling Coil Designer v2.5",
     page_icon="💧",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -46,7 +46,10 @@ MATERIAL_K = {
     "Aluminum": 205.0,
     "Copper": 380.0,
     "Steel": 50.0,
-    "CuNi 90/10": 29.0,
+    "CuNi 90/10": 50.0,
+    "CuNi 70/30": 29.0,
+    "Brass 63/37": 120.0,
+    "Brass 80/20": 160.0,
 }
 
 require_login()
@@ -58,10 +61,10 @@ with st.sidebar:
     if st.button("Logout", use_container_width=True):
         logout()
     st.divider()
-    st.caption("Engineering model v2.4.7 - fully coupled tube-by-tube thermal + physical circuiting")
+    st.caption("Engineering model v2.5 - fully coupled tube-by-tube thermal + physical circuiting")
     st.caption("Air crosses the tube axes; water connection side only changes row progression.")
 
-st.title("💧 Chilled Water Cooling Coil Designer v2.4.7")
+st.title("💧 Chilled Water Cooling Coil Designer v2.5")
 st.caption(
     "Wet/dry cooling - row-by-row air and coolant temperatures - air/water dP - "
     "target checking - multi-user Streamlit"
@@ -83,8 +86,8 @@ with input_tab:
 
     st.subheader("1. Coil face and tube bank")
     c1, c2, c3 = st.columns(3)
-    face_W = c1.number_input("Face width / tube length (m)", 0.20, 6.0, 1.20, 0.01)
-    face_H = c2.number_input("Face height (m)", 0.20, 4.0, 0.85, 0.01)
+    face_W = c1.number_input("Coil face width / tube length (m)", 0.20, 6.0, 1.20, 0.01)
+    face_H = c2.number_input("Coil face height (m)", 0.20, 4.0, 0.85, 0.01)
     rows = c3.number_input(
         "Number of tube rows in coil (airflow direction)",
         min_value=1, max_value=20, value=6, step=1,
@@ -96,11 +99,25 @@ with input_tab:
     )
 
     c1, c2, c3 = st.columns(3)
-    Pt_mm = c1.number_input("Tube pitch across face Pt (mm)", 12.0, 60.0, 25.4, 0.1,
+    Pt_mm = c1.number_input("Vertical tube pitch (mm)", 12.0, 60.0, 25.4, 0.1,
                             help="Vertical/transverse pitch between tubes in one row.")
-    Pl_mm = c2.number_input("Row pitch in airflow direction Pl (mm)", 10.0, 60.0, 22.0, 0.1,
+    Pl_mm = c2.number_input("Row pitch, airflow depth (mm)", 10.0, 60.0, 22.0, 0.1,
                             help="Distance between successive tube rows through coil depth.")
-    Do_mm = c3.number_input("Tube OD (mm)", 5.0, 25.0, 9.53, 0.01)
+    tube_shape = st.selectbox("Tube cross-section", ["Round tube", "Flat / elliptical tube"])
+    Do_mm = c3.number_input("Tube OD (mm)" if tube_shape=="Round tube" else "Flat tube outside major axis, airflow direction (mm)",
+                             5.0, 50.0 if tube_shape!="Round tube" else 25.0, 9.53, 0.01)
+    if tube_shape=="Round tube":
+        minor_mm=Do_mm
+        fin_construction="Plate fins"
+    else:
+        d1,d2=st.columns(2)
+        minor_mm=d1.number_input("Flat tube outside minor axis, vertical (mm)",2.0,30.0,6.0,0.1)
+        fin_construction=d2.selectbox("Fin construction",["Plate fins","Serpentine fins"])
+        st.caption("Ellipse major axis lies in airflow depth; its minor axis is vertical. "
+                   "Serpentine fin FPI counts individual inclined legs along tube length.")
+        if minor_mm>=Do_mm:
+            st.error("Flat tube minor axis must be smaller than its airflow-aligned major axis.")
+            st.stop()
     st.info(
         f"Selected coil: **{int(rows)} rows** through airflow depth | "
         f"Nominal tube-bank depth = **{int(rows) * Pl_mm:.1f} mm** "
@@ -110,16 +127,21 @@ with input_tab:
     st.subheader("2. Fin and tube construction")
     c1, c2, c3 = st.columns(3)
     FPI = c1.number_input(
-        "Fins per inch (FPI)", 4.0, 30.0, 10.0, 0.5,
+        "Serpentine fin FPI (individual legs per inch)" if fin_construction=="Serpentine fins" else "Plate fin FPI (plates per inch)",
+        4.0, 30.0, 10.0, 0.5,
         help="Direct manufacturing input. Fin pitch = 25.4/FPI mm.",
     )
     tf_mm = c2.number_input("Fin thickness (mm)", 0.05, 0.50, 0.12, 0.01)
-    fin_type = c3.selectbox("Fin type", ["Plain fin", "Wavy fin", "Wavy + louvers"], index=2)
+    fin_type = c3.selectbox("Fin type", ["Plain fin", "Wavy fin", "Wavy + louvers"], index=2) if fin_construction=="Plate fins" else "Wavy fin"
     st.caption(f"Calculated fin pitch = {25.4/FPI:.3f} mm ({FPI:.1f} FPI)")
+    st.caption('Geometry: tube length = coil face width; tubes per row count up coil face height; '
+               'row pitch adds airflow depth. '+('Each plate spans face height × total depth and repeats along tube length.'
+               if fin_construction=='Plate fins' else
+               'Corrugated strips fill vertical tube gaps; FPI counts inclined legs along tube length.'))
 
     c1, c2, c3 = st.columns(3)
-    fin_mat = c1.selectbox("Fin material", ["Aluminum", "Copper", "Steel"], index=0)
-    tube_mat = c2.selectbox("Tube material", ["Copper", "Aluminum", "Steel", "CuNi 90/10"], index=0)
+    fin_mat = c1.selectbox("Fin material", ["Aluminum", "Copper", "Steel", "Brass 63/37"], index=0)
+    tube_mat = c2.selectbox("Tube material", ["Copper", "Aluminum", "Steel", "Brass 63/37", "Brass 80/20", "CuNi 90/10", "CuNi 70/30"], index=0)
     tw_mm = c3.number_input("Tube wall thickness (mm)", 0.20, 3.0, 0.35, 0.01)
 
     with st.expander("Fin geometry, fouling and correlation calibration"):
@@ -240,7 +262,8 @@ with input_tab:
     except Exception:
         rho_ui = 1000.0
     suggestion = suggested_coolant_flow_for_velocity(
-        Do_mm * MM, tw_mm * MM, int(circuits), suggested_tube_velocity, rho_ui
+        Do_mm * MM, tw_mm * MM, int(circuits), suggested_tube_velocity, rho_ui,
+        minor_mm * MM
     )
     tube_ID_m_ui = suggestion["tube_ID_m"]
     tube_flow_area_ui = suggestion["tube_flow_area_m2"]
@@ -253,7 +276,9 @@ with input_tab:
         f"**Suggested starting coolant flow for {suggested_tube_velocity:.2f} m/s in each tube:** "
         f"**{suggested_Vdot_m3_h:.3f} m3/h** = **{suggested_L_s:.3f} L/s** = "
         f"**{suggested_mdot_kg_s:.3f} kg/s** at the current coolant density. "
-        f"Basis: tube ID **{tube_ID_m_ui*1000:.3f} mm**, {int(circuits)} parallel circuits. "
+        f"Basis: internal major/minor axes **{suggestion['tube_inner_major_axis_m']*1000:.3f}/"
+        f"{suggestion['tube_inner_minor_axis_m']*1000:.3f} mm** (hydraulic diameter "
+        f"**{tube_ID_m_ui*1000:.3f} mm**), {int(circuits)} parallel circuits. "
         "This is only a starting recommendation; edit the actual flow below as required."
     )
 
@@ -379,6 +404,8 @@ with input_tab:
         transverse_pitch_m=Pt_mm * MM,
         longitudinal_pitch_m=Pl_mm * MM,
         tube_od_m=Do_mm * MM,
+        tube_minor_axis_m=minor_mm * MM if tube_shape!="Round tube" else None,
+        fin_construction=fin_construction,
         tube_thickness_m=tw_mm * MM,
         fpi=FPI,
         fin_thickness_m=tf_mm * MM,
@@ -467,12 +494,14 @@ with input_tab:
                 )
 
             inp = {
-                "version": "2.4.7",
+                "version": "2.5",
                 "customer_name": customer_name, "contact_name": contact_name,
                 "project_name": project_name, "reference": reference,
                 "tag_description": tag_description, "coil_quantity": int(coil_quantity),
                 "face_width_m": face_W, "face_height_m": face_H, "rows": int(rows),
                 "Pt_mm": Pt_mm, "Pl_mm": Pl_mm, "tube_OD_mm": Do_mm, "tube_wall_mm": tw_mm,
+                "tube_shape":tube_shape,"tube_minor_axis_mm":minor_mm,
+                "fin_construction":fin_construction,
                 "FPI": FPI, "fin_pitch_mm": 25.4/FPI, "fin_thickness_mm": tf_mm,
                 "fin_type": fin_type, "fin_material": fin_mat, "tube_material": tube_mat,
                 "wave_2a_mm": wave_2a_mm, "wave_half_mm": wave_half_mm,
@@ -853,15 +882,21 @@ with result_tab:
         gcalc = r["geometry"]
         geo_df = pd.DataFrame({
             "Item": [
-                "Fin type", "Fin material", "Tube material", "FPI", "Fin pitch",
+                "Tube and fin orientation", "Tube cross-section", "Fin construction", "Fin type", "Fin material", "Tube material", "FPI", "Fin pitch",
                 "Number of rows", "Tubes per row", "Total tubes", "Selected circuits", "Circuit model", "Tube length", "Fin count",
-                "Face / free-flow area", "Free-area ratio", "External air-side area (total)", "Net fin area", "Exposed tube outside area", "Inside tube heat-transfer area",
+                "Tube major / minor outside axes", "Tube internal flow area / hydraulic diameter", "Fin strips between tubes", "Tube holes / plate", "Gross fin area / plate", "Tube hole area / plate", "Net fin area / plate", "Gross tube area", "Tube area covered by fins", "Face / free-flow area", "Free-area ratio", "External air-side area (total)", "Net fin area", "Exposed tube outside area", "Inside tube heat-transfer area",
             ],
             "Value": [
-                inp["fin_type"], inp["fin_material"], inp["tube_material"], f"{inp['FPI']:.1f} 1/in",
+                gcalc['orientation'],inp["tube_shape"],inp["fin_construction"],inp["fin_type"], inp["fin_material"], inp["tube_material"], f"{inp['FPI']:.1f} 1/in",
                 f"{inp['fin_pitch_mm']:.3f} mm", inp["rows"], gcalc["n_tubes_per_row"], gcalc["n_tubes_total"],
                 inp["circuits"], r.get("circuit_model", "Equal-flow circuit-count model"),
                 f"{gcalc['tube_length_m']:.3f} m", gcalc["n_fins"],
+                f"{gcalc['tube_major_axis_m']*1000:.3f} / {gcalc['tube_minor_axis_m']*1000:.3f} mm",
+                f"{gcalc['inside_flow_area_m2']:.7f} m2 / {gcalc['Di_m']*1000:.3f} mm",
+                gcalc['serpentine_strip_count'],gcalc['fin_holes_each'],
+                f"{gcalc['fin_gross_area_each_m2']:.5f} m2",f"{gcalc['fin_hole_area_each_m2']:.5f} m2",
+                f"{gcalc['fin_net_area_each_m2']:.5f} m2",f"{gcalc['A_tube_outer_full_m2']:.4f} m2",
+                f"{gcalc['tube_area_covered_by_fins_m2']:.4f} m2",
                 f"{gcalc['face_area_m2']:.3f} / {gcalc['free_flow_area_m2']:.3f} m2",
                 f"{gcalc['free_area_ratio']:.3f}", f"{gcalc['A_air_total_m2']:.2f} m2",
                 f"{gcalc['A_fin_m2']:.2f} m2", f"{gcalc['A_bare_m2']:.2f} m2",
@@ -1000,7 +1035,7 @@ Air is marched serially from the entering face to the leaving face. For water en
 
 ### Physical circuiting editor
 
-v2.4.7 uses the manufacturing circuit map directly in the thermal solution. A tube is identified by row and vertical position, for example `R6-T1`. A circuit is an ordered list of tube passes joined by return bends. The app checks duplicate/missing tubes, each circuit's pass count, same-end/even-pass and opposite-end/odd-pass compatibility, and long bend spans. **Equal pass counts are preferred but are not required.** A complete route activates the circuit-resolved header/friction network and the fully coupled tube-by-tube thermal solver.
+v2.5 uses the manufacturing circuit map directly in the thermal solution. A tube is identified by row and vertical position, for example `R6-T1`. A circuit is an ordered list of tube passes joined by return bends. The app checks duplicate/missing tubes, each circuit's pass count, same-end/even-pass and opposite-end/odd-pass compatibility, and long bend spans. **Equal pass counts are preferred but are not required.** A complete route activates the circuit-resolved header/friction network and the fully coupled tube-by-tube thermal solver.
 
 When a complete route is defined, the app switches to a fully coupled tube-by-tube / air-lane iteration. Each R#-T# cell receives the local air state from the previous row and the local coolant temperature from the previous tube in its circuit. The cell is solved as a local cross-flow wet/dry heat exchanger; both outlet states are then propagated and the whole grid is iterated to convergence. Unequal circuit lengths are allowed when every circuit retains the required even/odd outlet-end parity. The hydraulic network calculates the resulting unequal flows instead of assuming equal distribution.
 

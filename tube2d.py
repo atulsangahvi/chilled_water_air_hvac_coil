@@ -108,6 +108,18 @@ def _run_grid_iteration(
 
     flow_by_c = {int(c): float(circuit_flows_kg_s[i]) for i, c in enumerate(sorted(routes))}
     cell_g = _cell_geometry(g, tpr)
+    # A serpentine strip sits *between* neighboring tubes.  A one-tube lane
+    # would otherwise appear to have zero fins.  Allocate exact full-coil
+    # area/free-flow geometry to cells; all cells sum back to the full coil.
+    cell_geom = geometry_areas(cell_g)
+    n_cells = rows*tpr
+    for key in ('A_fin_m2','A_bare_m2','A_air_total_m2','A_i_total_m2',
+                'A_tube_outer_full_m2','L_total_tube_m',
+                'A_external_primary_tube_m2','A_external_secondary_fin_m2'):
+        cell_geom[key] = geom_full[key]/n_cells
+    cell_geom['free_flow_area_m2'] = geom_full['free_flow_area_m2']/tpr
+    cell_geom['face_area_m2'] = geom_full['face_area_m2']/tpr
+    cell_geom['free_area_ratio'] = geom_full['free_area_ratio']
     ain0 = air_state_from_db_rh(air_in_cond.db_C, air_in_cond.rh_pct, air_in_cond.pressure_Pa)
     mdot_da_total = total_air_m3_s / max(ain0["Vda_m3_kgda"], 1e-12)
     mdot_da_lane = mdot_da_total / max(tpr, 1)
@@ -153,6 +165,7 @@ def _run_grid_iteration(
                 water_fouling_m2K_W,
                 air_bank_rows=rows,
                 compute_hydraulics=False,
+                geometry_override=cell_geom,
             )
             rr["Tube"] = label
             rr["water_in_C"] = float(tw_in_guess[label])

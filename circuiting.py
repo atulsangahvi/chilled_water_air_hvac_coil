@@ -421,8 +421,9 @@ def _friction_factor(Re: float, rel_rough: float) -> float:
 
 
 def _tube_path_dp(mdot: float, tube_count: int, L_tube: float, Di: float, rho: float, mu: float,
-                  rough: float, bend_K: float, branch_K: float) -> Tuple[float, float, float, float]:
-    A = math.pi * Di ** 2 / 4.0
+                  rough: float, bend_K: float, branch_K: float,
+                  flow_area_m2: float | None = None) -> Tuple[float, float, float, float]:
+    A = flow_area_m2 if flow_area_m2 is not None else math.pi * Di ** 2 / 4.0
     v = mdot / max(rho * A, 1e-12)
     Re = rho * v * Di / max(mu, 1e-12)
     f = _friction_factor(Re, rough / max(Di, 1e-12))
@@ -532,6 +533,7 @@ def explicit_circuit_hydraulics(
             dp, v, Re, f = _tube_path_dp(
                 q, len(route), geom["tube_length_m"], geom["Di_m"], pcore["rho"], pcore["mu"],
                 hyd.tube_roughness_m, hyd.return_bend_K, hyd.branch_takeoff_K,
+                geom["inside_flow_area_m2"],
             )
             core.append(dp); velocities.append(v); res.append(Re); frics.append(f)
         ds = _header_paths_actual_positions(supply_pos, flows.tolist(), props["rho"], props["mu"], Dsup, Lh, hyd.header_roughness_m, supply_terminal)
@@ -558,7 +560,8 @@ def explicit_circuit_hydraulics(
     for i_c, (q, route) in enumerate(zip(flows, route_list)):
         pcore = circuit_props[i_c] if circuit_props is not None else props
         dp,v,Re,f = _tube_path_dp(q, len(route), geom["tube_length_m"], geom["Di_m"], pcore["rho"], pcore["mu"],
-                                  hyd.tube_roughness_m, hyd.return_bend_K, hyd.branch_takeoff_K)
+                                  hyd.tube_roughness_m, hyd.return_bend_K, hyd.branch_takeoff_K,
+                                  geom["inside_flow_area_m2"])
         core.append(dp); velocities.append(v); res.append(Re); frics.append(f)
     ds = _header_paths_actual_positions(supply_pos, flows.tolist(), props["rho"], props["mu"], Dsup, Lh, hyd.header_roughness_m, supply_terminal)
     dr = _header_paths_actual_positions(return_pos, flows.tolist(), props["rho"], props["mu"], Dret, Lh, hyd.header_roughness_m, return_terminal)

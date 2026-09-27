@@ -78,3 +78,6 @@ Use 10–30 trusted coil operating points spanning rows, FPI, face velocity, ent
 6. water pressure drop
 
 Calibrate only physically defensible multipliers/K values, then lock them by fin tooling and header/bend construction rather than fitting each coil independently.
+
+## v2.5 flat-tube and serpentine geometry
+The tube axis is the face width; major ellipse axis points along airflow depth, minor axis vertically. Geometry/counting uses the same condenser v28.7 formulation. Tube inner flow area is pi x major ID x minor ID / 4, internal wetted perimeter follows Ramanujan ellipse perimeter, and hydraulic diameter is 4A/P. Continuous plate FPI counts plates; serpentine FPI counts inclined legs in vertical tube gaps. The air-side Wang round-tube j/f correlation and water-side hydraulic-diameter Gnielinski extension for flat passages are screening estimates; verify against measured coils. The 2-D lane solver allocates the complete core fin and exposed tube area to cells so serpentine strips between lanes do not disappear.

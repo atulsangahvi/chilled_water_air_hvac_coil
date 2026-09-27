@@ -1,3 +1,11 @@
+# v2.5: condenser-aligned tube and fin geometry
+
+- Tube axis runs along coil face width; vertical tube pitch determines tubes per row; row pitch determines coil depth. The fin count and areas are calculated by the same geometry module as the corrected condenser/evaporator model. FPI counts plates for plate fins and inclined legs for serpentine fins.
+- Select round tube plus plate fins, elliptical/flat tube plus plate fins, or elliptical/flat tube plus serpentine fins. For flat tubes the major outside axis points in airflow depth and the minor outside axis is vertical.
+- Coil reports and UI show fin count, tube count, fin and exposed tube area, plate-hole deductions, free-flow area and internal water flow area/hydraulic diameter. Water velocity, heat transfer and explicit circuit losses use the selected internal flow area.
+- Brass 63/37 is available for fins and tubes; Brass 80/20 and CuNi 70/30 are available for tubes only, alongside the original material choices. The round-coil circuit editor, row/cell solution, existing report types and export permissions remain available.
+- Flat/serpentine heat-transfer and air friction use a round-tube equivalent-geometry correlation, with warnings in UI and PDF. This is a preliminary rating that requires actual core test data for production. Smooth flat water passages use hydraulic-diameter screening. Internal microchannels and enhanced microfin passages are not modeled.
+
 
 
 ### v2.4.7 updates

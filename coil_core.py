@@ -2,7 +2,7 @@
 
 Scope
 -----
-* Round smooth tubes, continuous plate/wavy fins.
+* Smooth round or elliptical tubes; continuous plate or serpentine fins.
 * Water / aqueous ethylene glycol / aqueous propylene glycol.
 * Dry, partially-wet and fully-wet cooling/dehumidification.
 * Air-side Wang-Tsai-Lu style wavy/louvered j/f correlation (as documented by ACHP).
@@ -21,6 +21,7 @@ import math
 
 import numpy as np
 import pandas as pd
+from condenser_geometry import coil_geometry, ellipse_perimeter
 try:
     from CoolProp.CoolProp import PropsSI, HAPropsSI
     HAS_COOLPROP = True
@@ -49,6 +50,8 @@ class CoilGeometry:
     wave_amplitude_2x_m: float = 1.0e-3  # Pd, twice wave amplitude
     wave_half_period_m: float = 1.0e-3   # xf, half wavelength
     fin_type: str = "Wavy + louvers"
+    tube_minor_axis_m: float | None = None
+    fin_construction: str = "Plate fins"
 
 
 @dataclass
@@ -76,22 +79,26 @@ class HydraulicInputs:
     common_exit_K: float = 1.0
 
 
-def suggested_coolant_flow_for_velocity(tube_od_m: float, tube_thickness_m: float, circuits: int, target_velocity_m_s: float, density_kg_m3: float) -> Dict[str, float]:
+def suggested_coolant_flow_for_velocity(tube_od_m: float, tube_thickness_m: float, circuits: int, target_velocity_m_s: float, density_kg_m3: float, tube_minor_axis_m: float | None = None) -> Dict[str, float]:
     """Starting coolant-flow suggestion from tube ID, parallel circuits and target tube velocity.
 
     This is intentionally only a starting point for the UI.  The user-entered flow remains the
     governing input for all subsequent thermal/hydraulic calculations.
     """
     Di = float(tube_od_m) - 2.0 * float(tube_thickness_m)
-    if Di <= 0:
+    minor_i = (float(tube_minor_axis_m) if tube_minor_axis_m is not None else float(tube_od_m)) - 2.0 * float(tube_thickness_m)
+    if min(Di,minor_i) <= 0:
         raise ValueError("Tube wall thickness must be less than half of tube OD.")
     N = max(int(circuits), 1)
     v = max(float(target_velocity_m_s), 0.0)
     rho = max(float(density_kg_m3), 1e-9)
-    area_one = math.pi * Di**2 / 4.0
+    area_one = math.pi * Di * minor_i / 4.0
+    Dh = 4.0 * area_one / ellipse_perimeter(Di, minor_i)
     Vdot = v * area_one * N
     return {
-        "tube_ID_m": Di,
+        "tube_ID_m": Dh,
+        "tube_inner_major_axis_m": Di,
+        "tube_inner_minor_axis_m": minor_i,
         "tube_flow_area_m2": area_one,
         "target_tube_velocity_m_s": v,
         "parallel_circuits": N,
@@ -220,18 +227,25 @@ def coolant_props(kind: str, glycol_pct: float, T_C: float, P: float = 300000.0)
 
 # ---------- Geometry ----------
 def geometry_areas(g: CoilGeometry) -> Dict[str, float]:
-    if g.tube_thickness_m * 2 >= g.tube_od_m:
+    minor = g.tube_minor_axis_m if g.tube_minor_axis_m is not None else g.tube_od_m
+    if g.tube_thickness_m * 2 >= min(g.tube_od_m,minor):
         raise ValueError("Tube wall thickness is too large for the selected OD.")
     if g.rows < 1:
         raise ValueError("Rows must be at least 1.")
 
-    Di = g.tube_od_m - 2.0 * g.tube_thickness_m
+    inside_major = g.tube_od_m - 2.0 * g.tube_thickness_m
+    inside_minor = minor - 2.0 * g.tube_thickness_m
+    inside_area = math.pi * inside_major * inside_minor / 4.0
+    inside_perimeter = ellipse_perimeter(inside_major,inside_minor)
+    Di = 4.0 * inside_area / inside_perimeter
     L_tube = g.face_width_m
     Pt = g.transverse_pitch_m
     Pl = g.longitudinal_pitch_m
     fin_pitch = INCH / g.fpi
-    n_fins = max(int(math.floor(L_tube / fin_pitch)), 1)
-    n_tubes_per_row = max(int(math.floor(g.face_height_m / Pt)), 1)
+    shared = coil_geometry(g.face_width_m,g.face_height_m,g.rows,Pl,Pt,
+                           g.tube_od_m,minor,g.fin_thickness_m,g.fpi,g.fin_construction)
+    n_fins = shared['fin_count']
+    n_tubes_per_row = shared['tubes_per_row']
     n_tubes_total = n_tubes_per_row * g.rows
     depth = Pl * g.rows
     A_face = g.face_width_m * g.face_height_m
@@ -248,30 +262,35 @@ def geometry_areas(g: CoilGeometry) -> Dict[str, float]:
         sec_theta = math.sqrt(g.wave_half_period_m ** 2 + g.wave_amplitude_2x_m ** 2) / max(g.wave_half_period_m, 1e-12)
 
     # Minimum free-flow area: fins counted along tube length, tubes per row by face height.
-    A_c = (
-        A_face
-        - g.fin_thickness_m * n_fins * (g.face_height_m - g.tube_od_m * n_tubes_per_row)
-        - n_tubes_per_row * g.tube_od_m * L_tube
-    )
-    A_c = max(A_c, 0.02 * A_face)
-
-    A_tube_outer_full = n_tubes_total * math.pi * g.tube_od_m * L_tube
-    # Net two-sided plate-fin area using PROJECTED fin-bank depth.
-    # Each continuous fin spans face height x (rows * longitudinal pitch).
-    # Subtract the circular tube holes once per side.
-    A_one_fin = 2.0 * (
-        g.face_height_m * Pl * g.rows
-        - n_tubes_total * math.pi * g.tube_od_m ** 2 / 4.0
-    )
-    A_fin = max(n_fins * A_one_fin, 0.0)
-    exposed_tube_length = max(L_tube - n_fins * g.fin_thickness_m, 0.0)
-    A_bare = n_tubes_total * math.pi * g.tube_od_m * exposed_tube_length
+    A_c = shared['minimum_free_flow_area_m2']
+    A_tube_outer_full = shared['tube_gross_outside_area_m2']
+    A_fin = shared['fin_total_net_area_m2']
+    A_bare = shared['tube_exposed_outside_area_m2']
     A_air_total = A_fin + A_bare
-    A_i_total = n_tubes_total * math.pi * Di * L_tube
+    A_i_total = n_tubes_total * inside_perimeter * L_tube
     L_total = n_tubes_total * L_tube
 
     return {
         "Di_m": Di,
+        "inner_major_axis_m": inside_major,
+        "inner_minor_axis_m": inside_minor,
+        "inside_flow_area_m2": inside_area,
+        "inside_perimeter_m": inside_perimeter,
+        "outside_perimeter_m": ellipse_perimeter(g.tube_od_m,minor),
+        "tube_major_axis_m": g.tube_od_m,
+        "tube_minor_axis_m": minor,
+        "air_correlation_diameter_m": math.sqrt(g.tube_od_m * minor),
+        "outside_hydraulic_diameter_m": math.pi*g.tube_od_m*minor/ellipse_perimeter(g.tube_od_m,minor),
+        "fin_construction": g.fin_construction,
+        "serpentine_strip_count": shared['serpentine_strip_count'],
+        "tube_area_covered_by_fins_m2": shared['tube_area_under_fin_thickness_m2'],
+        "fin_net_area_each_m2": shared['fin_net_area_per_plate_two_faces_m2'],
+        "fin_holes_each":shared['tube_hole_count_per_plate'],
+        "fin_hole_area_each_m2":shared['fin_hole_deduction_per_plate_two_faces_m2'],
+        "fin_gross_area_each_m2":shared['fin_gross_area_per_plate_two_faces_m2'],
+        "tube_projected_blockage_m2":shared['tube_projected_blockage_m2'],
+        "fin_edge_blockage_m2":shared['fin_edge_blockage_m2'],
+        "orientation":shared['orientation'],
         "tube_length_m": L_tube,
         "n_fins": n_fins,
         "n_tubes_per_row": n_tubes_per_row,
@@ -313,10 +332,11 @@ def airside_wang_wavy_louvered(
     mu, k = dry_air_transport(air_in["T_C"], P_ATM)
     cp_ha = (1006.0 + air_in["W"] * 1860.0) / max(1.0 + air_in["W"], 1e-12)  # J/kg humid-air-K
     Pr = cp_ha * mu / max(k, 1e-12)
-    Re_D = rho * u_max * g.tube_od_m / max(mu, 1e-12)
+    Dc = geom["air_correlation_diameter_m"]
+    Re_D = rho * u_max * Dc / max(mu, 1e-12)
 
     # In the Wang/ACHP equations p_f is fin pitch.
-    pf_D = geom["fin_pitch_m"] / g.tube_od_m
+    pf_D = geom["fin_pitch_m"] / Dc
     area_ratio = geom["A_air_total_m2"] / max(geom["A_tube_outer_full_m2"], 1e-12)
     Re_eff = max(Re_D, 50.0)
     j = (
@@ -372,14 +392,14 @@ def airside_wang_plain(
     mu, k = dry_air_transport(air_in["T_C"], P_ATM)
     cp_ha = (1006.0 + air_in["W"] * 1860.0) / max(1.0 + air_in["W"], 1e-12)
     Pr = cp_ha * mu / max(k, 1e-12)
-    Re = Gmax * g.tube_od_m / max(mu, 1e-12)
+    Dc = geom["air_correlation_diameter_m"]
+    Re = Gmax * Dc / max(mu, 1e-12)
     N = max(int(bank_rows if bank_rows is not None else g.rows), 1)
 
     # Hydraulic diameter based on free volume / wetted air-side surface.
     Dh = 4.0 * A_c * geom["depth_m"] / max(geom["A_air_total_m2"], 1e-12)
     Dh = max(Dh, 1e-6)
     Fp = geom["fin_pitch_m"]
-    Dc = g.tube_od_m
     Pt = g.transverse_pitch_m
     Pl = g.longitudinal_pitch_m
     Re_eff = max(Re, 120.0)
@@ -442,6 +462,11 @@ def airside_dispatch(
 
 
 def fin_efficiency_staggered(g: CoilGeometry, h_a: float, cs_cp: float = 1.0) -> float:
+    if g.fin_construction == 'Serpentine fins' or g.tube_minor_axis_m is not None:
+        minor = g.tube_minor_axis_m if g.tube_minor_axis_m is not None else g.tube_od_m
+        leg = max((g.transverse_pitch_m-minor)/2.0,1e-9)
+        m = math.sqrt(max(2.0*h_a*cs_cp/(g.fin_k_W_mK*g.fin_thickness_m),0.0))
+        return max(0.05,min(1.0,math.tanh(m*leg)/(m*leg))) if m*leg>1e-8 else 1.0
     r = g.tube_od_m / 2.0
     X_D = math.sqrt(g.longitudinal_pitch_m ** 2 + g.transverse_pitch_m ** 2 / 4.0) / 2.0
     X_T = g.transverse_pitch_m / 2.0
@@ -487,7 +512,7 @@ def water_side_htc(
     geom: Dict[str, float], circuits: int, mdot_total: float, props: Dict[str, float], roughness_m: float
 ) -> Dict[str, float]:
     Di = geom["Di_m"]
-    Aflow = math.pi * Di ** 2 / 4.0
+    Aflow = geom["inside_flow_area_m2"]
     mdot_c = mdot_total / max(circuits, 1)
     v = mdot_c / max(props["rho"] * Aflow, 1e-12)
     Re = props["rho"] * v * Di / max(props["mu"], 1e-12)
@@ -641,8 +666,9 @@ def thermal_performance(
     water_fouling_m2K_W: float = 0.0,
     air_bank_rows: int | None = None,
     compute_hydraulics: bool = True,
+    geometry_override: Dict[str, float] | None = None,
 ) -> Dict[str, object]:
-    geom = geometry_areas(g)
+    geom = geometry_override if geometry_override is not None else geometry_areas(g)
     ain = air_state_from_db_rh(air_in_cond.db_C, air_in_cond.rh_pct, air_in_cond.pressure_Pa)
     mdot_da = air_volume_flow_m3_s / ain["Vda_m3_kgda"]
     aircorr = airside_dispatch(geom, g, ain, air_volume_flow_m3_s,
@@ -664,7 +690,7 @@ def thermal_performance(
 
     # Tube wall + fouling as total resistance for the whole coil.
     Ltot = geom["L_total_tube_m"]
-    R_wall = math.log(g.tube_od_m / geom["Di_m"]) / (2.0 * math.pi * g.tube_k_W_mK * Ltot)
+    R_wall = math.log(geom["outside_hydraulic_diameter_m"] / geom["Di_m"]) / (2.0 * math.pi * g.tube_k_W_mK * Ltot)
     R_fo = air_fouling_m2K_W / max(A_a, 1e-12)
     R_fi = water_fouling_m2K_W / max(A_i, 1e-12)
     R_inside = 1.0 / max(UA_i, 1e-12) + R_wall + R_fi
@@ -1111,6 +1137,8 @@ def warnings_for_result(result: Dict[str, object]) -> List[str]:
         w.append("Air Reynolds number is outside the approximate range used for the current wavy/louvered air-side model; extrapolation is occurring.")
     if result.get("fin_type") == "Wavy fin":
         w.append("Wavy-fin mode currently uses a transparent plain-fin Wang baseline with corrected physical fin/tube area. Calibrate h and dP against the actual wavy fin die before production use.")
+    if geom["tube_minor_axis_m"] < geom["tube_major_axis_m"]-1e-9 or geom["fin_construction"] == "Serpentine fins":
+        w.append("Flat tubes or serpentine fins use round-tube air-side j/f correlations with a geometry-equivalent diameter. Flat-tube water HTC and pressure loss use hydraulic-diameter extensions of smooth circular-tube methods. Treat both capacity and pressure loss as screening estimates; calibrate against a matching core before manufacturing.")
     if wh["Re_water"] < 3000:
         w.append("Water-side Reynolds number is below 3000; turbulent Gnielinski performance is not fully established and heat transfer may be transition/laminar.")
     if wh["velocity_m_s"] < 0.45:
