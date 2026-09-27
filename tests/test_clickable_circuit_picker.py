@@ -1,6 +1,7 @@
 import pytest
 
 from circuit_picker import apply_tube_click
+from circuit_plot import selected_tube, tube_plot
 from circuiting import circuit_svg,validate_routes
 
 
@@ -27,3 +28,14 @@ def test_click_rejects_stealing_outside_geometry_and_non_last_removal():
         with pytest.raises(ValueError):
             apply_tube_click(routes,circuit,tube,2,2)
     assert routes=={1:['R2-T1','R1-T1'],2:[]}
+
+
+def test_plot_selection_identifies_only_tube_markers():
+    fig=tube_plot(2,4,{1:['R2-T1','R1-T1'],2:[]})
+    marker_index=len(fig.data)-1
+    marker=fig.data[marker_index]
+    assert len(marker.customdata)==8
+    assert marker.customdata[1][0]=='R2-T1'
+    selection={'points':[{'curve_number':marker_index,'customdata':['R2-T1']}]}
+    assert selected_tube(selection,marker_index)=='R2-T1'
+    assert selected_tube({'points':[{'curve_number':0,'customdata':['R2-T1']}]},marker_index) is None

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 from datetime import datetime
 
@@ -8,7 +9,7 @@ import pandas as pd
 import streamlit as st
 
 st.set_page_config(
-    page_title="Chilled Water Cooling Coil Designer v2.5.1",
+    page_title="Chilled Water Cooling Coil Designer v2.5.2",
     page_icon="💧",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -32,7 +33,6 @@ from reporting import build_pdf, build_output_pdf
 from tube2d import coupled_tube_by_tube_performance
 from circuiting import (
     auto_serpentine_routes,
-    circuit_svg,
     compatibility_summary,
     parse_route_text,
     route_text,
@@ -40,9 +40,8 @@ from circuiting import (
     tube_id,
     validate_routes,
 )
-from circuit_picker import apply_tube_click, register_clickable_svg
-
-CLICKABLE_CIRCUIT_SVG = register_clickable_svg()
+from circuit_picker import apply_tube_click
+from circuit_plot import selected_tube, tube_plot
 
 CFM_TO_M3S = 0.00047194745
 MATERIAL_K = {
@@ -64,10 +63,10 @@ with st.sidebar:
     if st.button("Logout", use_container_width=True):
         logout()
     st.divider()
-    st.caption("Engineering model v2.5.1 - fully coupled tube-by-tube thermal + physical circuiting")
+    st.caption("Engineering model v2.5.2 - fully coupled tube-by-tube thermal + physical circuiting")
     st.caption("Air crosses the tube axes; water connection side only changes row progression.")
 
-st.title("💧 Chilled Water Cooling Coil Designer v2.5.1")
+st.title("💧 Chilled Water Cooling Coil Designer v2.5.2")
 st.caption(
     "Wet/dry cooling - row-by-row air and coolant temperatures - air/water dP - "
     "target checking - multi-user Streamlit"
@@ -498,7 +497,7 @@ with input_tab:
                 )
 
             inp = {
-                "version": "2.5.1",
+                "version": "2.5.2",
                 "customer_name": customer_name, "contact_name": contact_name,
                 "project_name": project_name, "reference": reference,
                 "tag_description": tag_description, "coil_quantity": int(coil_quantity),
@@ -608,26 +607,31 @@ with circuit_tab:
     selected_circuit = st.selectbox("Active circuit", list(range(1, int(circuits)+1)), key="active_circuit")
     st.markdown("#### Click tubes in the circuit drawing")
     st.caption("Choose an active circuit, then click each circle in water-flow order. Click the last selected circle again to undo that pass. Coloured paths update as you work.")
-    drawing = circuit_svg(int(rows), tubes_per_row_ui, routes)
-    if CLICKABLE_CIRCUIT_SVG is not None:
-        def on_circuit_drawing_click():
-            clicked=st.session_state["cw_clickable_svg"].clicked
-            if clicked:
-                try:
-                    st.session_state["circuit_editor_message"] = apply_tube_click(
-                        st.session_state["circuit_routes"],
-                        st.session_state.get("active_circuit",1),clicked,
-                        int(rows),tubes_per_row_ui,
-                    )
-                except ValueError as exc:
-                    st.session_state["circuit_editor_message"] = str(exc)
-        CLICKABLE_CIRCUIT_SVG(
-            data={"svg":drawing},key="cw_clickable_svg",
-            on_clicked_change=on_circuit_drawing_click,
-        )
-    else:
-        st.markdown(drawing, unsafe_allow_html=True)
-        st.caption("For direct clicks on this drawing, install Streamlit 1.51 or later. The clickable tube matrix below remains available.")
+    drawing = tube_plot(int(rows), tubes_per_row_ui, routes)
+    drawing_signature = json.dumps({"geometry": geometry_signature, "routes": routes,
+                                    "active": selected_circuit}, sort_keys=True)
+    drawing_key = ("cw_tube_plot_" + hashlib.sha256(drawing_signature.encode()).hexdigest()[:16]
+                   + f"_{st.session_state.get('cw_plot_nonce', 0)}")
+
+    def on_circuit_drawing_click():
+        point = selected_tube(st.session_state[drawing_key].selection,
+                              len(drawing.data) - 1)
+        if point:
+            try:
+                st.session_state["circuit_editor_message"] = apply_tube_click(
+                    st.session_state["circuit_routes"],
+                    st.session_state.get("active_circuit", 1), point,
+                    int(rows), tubes_per_row_ui,
+                )
+            except ValueError as exc:
+                st.session_state["circuit_editor_message"] = str(exc)
+            # A new chart key clears the prior selection, so the same tube can
+            # be clicked again to undo even when the route did not change.
+            st.session_state["cw_plot_nonce"] = st.session_state.get("cw_plot_nonce", 0) + 1
+
+    st.plotly_chart(drawing, use_container_width=True, key=drawing_key,
+                    on_select=on_circuit_drawing_click, selection_mode="points",
+                    config={"displaylogo": False, "displayModeBar": False})
     st.caption(
         "The coloured lines are the ordered circuit route through the row/tube matrix. The drawing is a circuit cross-section; "
         "actual straight tubes run along the face width, perpendicular to this view."
@@ -1066,7 +1070,7 @@ Air is marched serially from the entering face to the leaving face. For water en
 
 ### Physical circuiting editor
 
-v2.5.1 uses the manufacturing circuit map directly in the thermal solution. A tube is identified by row and vertical position, for example `R6-T1`. A circuit is an ordered list of tube passes joined by return bends. The app checks duplicate/missing tubes, each circuit's pass count, same-end/even-pass and opposite-end/odd-pass compatibility, and long bend spans. **Equal pass counts are preferred but are not required.** A complete route activates the circuit-resolved header/friction network and the fully coupled tube-by-tube thermal solver.
+v2.5.2 uses the manufacturing circuit map directly in the thermal solution. A tube is identified by row and vertical position, for example `R6-T1`. A circuit is an ordered list of tube passes joined by return bends. The app checks duplicate/missing tubes, each circuit's pass count, same-end/even-pass and opposite-end/odd-pass compatibility, and long bend spans. **Equal pass counts are preferred but are not required.** A complete route activates the circuit-resolved header/friction network and the fully coupled tube-by-tube thermal solver.
 
 When a complete route is defined, the app switches to a fully coupled tube-by-tube / air-lane iteration. Each R#-T# cell receives the local air state from the previous row and the local coolant temperature from the previous tube in its circuit. The cell is solved as a local cross-flow wet/dry heat exchanger; both outlet states are then propagated and the whole grid is iterated to convergence. Unequal circuit lengths are allowed when every circuit retains the required even/odd outlet-end parity. The hydraulic network calculates the resulting unequal flows instead of assuming equal distribution.
 

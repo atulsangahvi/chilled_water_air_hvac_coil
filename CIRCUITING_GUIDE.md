@@ -1,4 +1,4 @@
-# Physical Water Circuiting Guide - v2.5.1
+# Physical Water Circuiting Guide - v2.5.2
 
 ## 1. What one dot means
 
@@ -21,7 +21,7 @@ This rule applies independently to every parallel circuit.
 
 ## 3. Unequal circuit lengths are allowed
 
-Equal pass counts are preferred because they reduce hydraulic and temperature maldistribution, but real coil geometry does not always divide exactly. v2.5.1 therefore permits intentional unequal circuit lengths and solves each route individually.
+Equal pass counts are preferred because they reduce hydraulic and temperature maldistribution, but real coil geometry does not always divide exactly. v2.5.2 therefore permits intentional unequal circuit lengths and solves each route individually.
 
 The important detail is outlet-end parity. With same-end headers, a 16-pass circuit and an 18-pass circuit are both valid because both are even. A 16-pass and 17-pass mixture would put the 17-pass outlet at the opposite tube end unless a special crossover/header arrangement is provided. With opposite-end headers, all routes must similarly remain odd-pass.
 
@@ -48,7 +48,7 @@ This is why an unequal route is not automatically rejected: its real consequence
 
 ## 6. Fully coupled tube-by-tube thermal solve
 
-v2.5.1 does **not** assign one common coolant temperature to every tube in a row. Each `R#-T#` cell has its own local state.
+v2.5.2 does **not** assign one common coolant temperature to every tube in a row. Each `R#-T#` cell has its own local state.
 
 For each tube cell:
 
@@ -63,4 +63,4 @@ Because coolant and air paths cross, the full grid is iterated until local coola
 
 ## 7. Remaining model assumptions
 
-The v2.5.1 2-D model assumes equal entering dry-air mass flow among the vertical lanes and does not yet model lateral air redistribution or cross-fin conduction between adjacent tubes. These are explicit later refinements and should be assessed during validation against actual coil tests.
+The v2.5.2 2-D model assumes equal entering dry-air mass flow among the vertical lanes and does not yet model lateral air redistribution or cross-fin conduction between adjacent tubes. These are explicit later refinements and should be assessed during validation against actual coil tests.

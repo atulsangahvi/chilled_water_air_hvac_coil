@@ -281,7 +281,7 @@ def build_pdf(inputs: dict, result: dict, target: dict | None, warnings: list[st
         leftMargin=15 * mm,
         topMargin=15 * mm,
         bottomMargin=15 * mm,
-        title="Chilled Water Cooling Coil Detailed Engineering Report v2.5.1",
+        title="Chilled Water Cooling Coil Detailed Engineering Report v2.5.2",
     )
 
     pframe = Frame(15 * mm, 15 * mm, psize[0] - 30 * mm, psize[1] - 30 * mm, id="portrait_frame")
@@ -290,7 +290,7 @@ def build_pdf(inputs: dict, result: dict, target: dict | None, warnings: list[st
     def footer(canvas, d):
         canvas.saveState()
         canvas.setFont("Helvetica", 7)
-        canvas.drawString(15 * mm, 7 * mm, "Chilled Water Cooling Coil Designer v2.5.1")
+        canvas.drawString(15 * mm, 7 * mm, "Chilled Water Cooling Coil Designer v2.5.2")
         canvas.drawRightString(canvas._pagesize[0] - 15 * mm, 7 * mm, f"Page {d.page}")
         canvas.restoreState()
 
@@ -306,7 +306,7 @@ def build_pdf(inputs: dict, result: dict, target: dict | None, warnings: list[st
     styles.add(ParagraphStyle(name="Tiny", parent=styles["BodyText"], fontSize=7, leading=8.5, spaceAfter=2))
 
     story = [
-        Paragraph("Chilled Water Cooling Coil Detailed Engineering Report - v2.5.1", styles["TitleC"]),
+        Paragraph("Chilled Water Cooling Coil Detailed Engineering Report - v2.5.2", styles["TitleC"]),
         Paragraph(f"Prepared by user: {_safe(username)}", styles["Smallx"]),
         Paragraph(
             "Physical flow geometry: CROSS-FLOW (air perpendicular to tube/coolant direction). "
@@ -590,7 +590,7 @@ def build_pdf(inputs: dict, result: dict, target: dict | None, warnings: list[st
         story.append(_table(d2,[9*mm,9*mm,17*mm,14*mm,14*mm,13*mm,14*mm,12*mm,14*mm,13*mm,13*mm,13*mm],font=5.5,repeat=1))
         story.append(Spacer(1, 4))
         story.append(Paragraph(
-            "Model assumption: equal entering dry-air mass flow per vertical tube lane. Lateral air redistribution and cross-fin conduction between adjacent tubes are not included in v2.5.1.",
+            "Model assumption: equal entering dry-air mass flow per vertical tube lane. Lateral air redistribution and cross-fin conduction between adjacent tubes are not included in v2.5.2.",
             styles["Tiny"],
         ))
 

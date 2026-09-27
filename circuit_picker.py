@@ -24,39 +24,3 @@ def apply_tube_click(routes, active_circuit: int, clicked: str,
     if owner==active:
         raise ValueError(f'{label} is an earlier pass in Circuit {active}. Use Undo last tube to keep its order.')
     raise ValueError(f'{label} already belongs to Circuit {owner}. Clear or edit that circuit first.')
-
-
-_JS = r"""
-export default function({parentElement, data, setTriggerValue}) {
-  const host = parentElement.querySelector('.cw-circuit-host');
-  host.innerHTML = data.svg;
-  host.querySelectorAll('circle[data-tube]').forEach(dot => {
-    const activate = () => setTriggerValue('clicked', dot.dataset.tube);
-    dot.addEventListener('click', activate);
-    dot.addEventListener('keydown', event => {
-      if (event.key === 'Enter' || event.key === ' ') {
-        event.preventDefault(); activate();
-      }
-    });
-  });
-}
-"""
-
-_CSS = r"""
-.cw-circuit-host {width:100%; overflow-x:auto}
-.cw-circuit-host svg {min-width:560px; max-width:100%; height:auto}
-.cw-circuit-host circle[data-tube] {cursor:pointer; transition:stroke-width .12s, r .12s}
-.cw-circuit-host circle[data-tube]:hover,
-.cw-circuit-host circle[data-tube]:focus {stroke-width:4; outline:2px solid #2563eb}
-"""
-
-
-def register_clickable_svg():
-    """Register the official Streamlit v2 component once per Python process."""
-    import streamlit as st
-    if not hasattr(st.components,'v2'):
-        return None
-    return st.components.v2.component(
-        'cw_clickable_circuit_svg',html='<div class="cw-circuit-host"></div>',
-        css=_CSS,js=_JS,
-    )
