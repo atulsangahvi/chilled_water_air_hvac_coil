@@ -231,6 +231,15 @@ def build_output_pdf(inputs: dict, result: dict, target: dict | None, username: 
         ["Sensible capacity", f"{float(result.get('Q_sensible_kW',0)):.2f} kW"],
         ["Latent capacity", f"{float(result.get('Q_latent_kW',0)):.2f} kW"],
     ]
+    selection=result.get('target_assessment') or {}
+    if selection:
+        air_rows += [
+            ["Complete selection status", selection['status']],
+            ["Capacity target", "Met" if selection['capacity_met'] else "Not met"],
+            ["Leaving-air state", ("Matched" if selection['leaving_air_matched'] else "Not matched")
+             if selection['air_state_specified'] else "Not specified (capacity-only mode)"],
+            ["Physical circuit route", "Complete" if selection['physical_route_complete'] else "Unverified"],
+        ]
     story += [Paragraph("Air Data", styles["BasicH2"]), basic_table(air_rows)]
 
     fluid_rows = [
@@ -250,7 +259,7 @@ def build_output_pdf(inputs: dict, result: dict, target: dict | None, username: 
         fluid_rows += [
             ["Least favorable outlet pressure", f"{margin['minimum_outlet_kPa_abs']:.2f} kPa abs"],
             ["Margin over water vapor reference", f"{margin['margin_over_water_vapor_kPa']:.2f} kPa"],
-            ["Pressure screen basis", margin["basis"]],
+            ["Pressure screen basis", "Pure-water reference; glycol and plant losses need review"],
         ]
     story += [Paragraph("Fluid Data", styles["BasicH2"]), basic_table(fluid_rows)]
 
@@ -288,7 +297,7 @@ def build_pdf(inputs: dict, result: dict, target: dict | None, warnings: list[st
         leftMargin=15 * mm,
         topMargin=15 * mm,
         bottomMargin=15 * mm,
-        title="Chilled Water Cooling Coil Detailed Engineering Report v2.5.3",
+        title="Chilled Water Cooling Coil Detailed Engineering Report v2.5.4",
     )
 
     pframe = Frame(15 * mm, 15 * mm, psize[0] - 30 * mm, psize[1] - 30 * mm, id="portrait_frame")
@@ -297,7 +306,7 @@ def build_pdf(inputs: dict, result: dict, target: dict | None, warnings: list[st
     def footer(canvas, d):
         canvas.saveState()
         canvas.setFont("Helvetica", 7)
-        canvas.drawString(15 * mm, 7 * mm, "Chilled Water Cooling Coil Designer v2.5.3")
+        canvas.drawString(15 * mm, 7 * mm, "Chilled Water Cooling Coil Designer v2.5.4")
         canvas.drawRightString(canvas._pagesize[0] - 15 * mm, 7 * mm, f"Page {d.page}")
         canvas.restoreState()
 
@@ -313,7 +322,7 @@ def build_pdf(inputs: dict, result: dict, target: dict | None, warnings: list[st
     styles.add(ParagraphStyle(name="Tiny", parent=styles["BodyText"], fontSize=7, leading=8.5, spaceAfter=2))
 
     story = [
-        Paragraph("Chilled Water Cooling Coil Detailed Engineering Report - v2.5.3", styles["TitleC"]),
+        Paragraph("Chilled Water Cooling Coil Detailed Engineering Report - v2.5.4", styles["TitleC"]),
         Paragraph(f"Prepared by user: {_safe(username)}", styles["Smallx"]),
         Paragraph(
             "Physical flow geometry: CROSS-FLOW (air perpendicular to tube/coolant direction). "
@@ -386,7 +395,7 @@ def build_pdf(inputs: dict, result: dict, target: dict | None, warnings: list[st
         perf_rows += [
             ["Least favorable coolant outlet pressure", f"{margin['minimum_outlet_kPa_abs']:.2f} kPa abs"],
             ["Static margin over water vapor reference", f"{margin['margin_over_water_vapor_kPa']:.2f} kPa"],
-            ["Pressure screen basis", margin["basis"]],
+            ["Pressure screen basis", "Pure-water reference; glycol and plant losses need review"],
         ]
     if target:
         perf_rows.append(["Target mode", target.get("target_mode", inputs.get("target_mode", ""))])
@@ -395,6 +404,20 @@ def build_pdf(inputs: dict, result: dict, target: dict | None, warnings: list[st
         ta = target.get("target_air") or {}
         if ta:
             perf_rows.append(["Target leaving air", f"DB {ta.get('T_C', 0):.2f} degC / WB {ta.get('Twb_C', 0):.2f} degC / RH {ta.get('RH_pct', 0):.1f}%"])
+    selection=result.get('target_assessment') or {}
+    if selection:
+        perf_rows += [
+            ["Complete selection status", selection['status']],
+            ["Capacity target met", "Yes" if selection['capacity_met'] else "No"],
+            ["Leaving air specified / matched", f"{selection['air_state_specified']} / {selection['leaving_air_matched']}"],
+            ["Physical circuit route complete", "Yes" if selection['physical_route_complete'] else "No"],
+        ]
+        if selection['air_state_specified']:
+            perf_rows += [
+                ["Leaving-air DB difference / tolerance", f"{selection['db_error_C']:+.2f} / ±{selection['db_tolerance_C']:.2f} K"],
+                ["Humidity difference / tolerance", f"{selection['humidity_error_g_kg']:+.2f} / ±{selection['humidity_tolerance_g_kg']:.2f} g/kg dry air"],
+                ["Air limits (DB / humidity) met", f"{selection['db_limit_met']} / {selection['humidity_limit_met']}"],
+            ]
     story.append(KeepTogether([Paragraph("Performance", styles["H2x"]), _table(perf_rows, [62 * mm, 113 * mm])]))
     ain = result.get("air_in", {})
     aout = result.get("air_out", {})
@@ -604,7 +627,7 @@ def build_pdf(inputs: dict, result: dict, target: dict | None, warnings: list[st
         story.append(_table(d2,[9*mm,9*mm,17*mm,14*mm,14*mm,13*mm,14*mm,12*mm,14*mm,13*mm,13*mm,13*mm],font=5.5,repeat=1))
         story.append(Spacer(1, 4))
         story.append(Paragraph(
-            "Model assumption: equal entering dry-air mass flow per vertical tube lane. Lateral air redistribution and cross-fin conduction between adjacent tubes are not included in v2.5.3.",
+            "Model assumption: equal entering dry-air mass flow per vertical tube lane. Lateral air redistribution and cross-fin conduction between adjacent tubes are not included in v2.5.4.",
             styles["Tiny"],
         ))
 

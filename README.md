@@ -1,4 +1,4 @@
-# v2.5.3: clickable circuit drawing and in-tab routed analysis
+# v2.5.4: clickable circuit drawing and in-tab routed analysis
 
 - Select an active circuit and click its tube circles directly in the circuit cross-section to construct an ordered physical route. Click the last tube again to undo. The existing button matrix, text entry, and automatic serpentine generator remain available.
 - A complete, valid circuit map enables **Run analysis using these circuits** on the Circuiting tab. The coupled tube-by-tube thermal and parallel hydraulic calculations use the exact selected tube order. Change routes and rerun to compare circuit arrangements.

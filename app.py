@@ -9,7 +9,7 @@ import pandas as pd
 import streamlit as st
 
 st.set_page_config(
-    page_title="Chilled Water Cooling Coil Designer v2.5.3",
+    page_title="Chilled Water Cooling Coil Designer v2.5.4",
     page_icon="💧",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -30,6 +30,7 @@ from coil_core import (
     warnings_for_result,
 )
 from reporting import build_pdf, build_output_pdf
+from target_assessment import assess_chilled_water_target
 from hydraulic_margin import coolant_pressure_margin
 from tube2d import coupled_tube_by_tube_performance
 from circuiting import (
@@ -64,10 +65,10 @@ with st.sidebar:
     if st.button("Logout", use_container_width=True):
         logout()
     st.divider()
-    st.caption("Engineering model v2.5.3 - fully coupled tube-by-tube thermal + physical circuiting")
+    st.caption("Engineering model v2.5.4 - fully coupled tube-by-tube thermal + physical circuiting")
     st.caption("Air crosses the tube axes; water connection side only changes row progression.")
 
-st.title("💧 Chilled Water Cooling Coil Designer v2.5.3")
+st.title("💧 Chilled Water Cooling Coil Designer v2.5.4")
 st.caption(
     "Wet/dry cooling - row-by-row air and coolant temperatures - air/water dP - "
     "target checking - multi-user Streamlit"
@@ -488,22 +489,15 @@ with input_tab:
                     pass
                 tar.update({"target_mode": target_mode, "target_format": target_state_mode})
 
-            if target_mode == "Required cooling capacity (kW)":
-                target_met = res["Q_total_kW"] >= tar["Q_required_kW"] - 1e-6
-            else:
-                targ_air = tar.get("target_air") or {}
-                target_met = (
-                    res["air_out"]["T_C"] <= float(targ_air.get("T_C", target_T)) + 0.05
-                    and res["air_out"]["W"] <= float(targ_air.get("W", res["air_out"]["W"])) + 1e-5
-                )
-
             res["pressure_margin"] = coolant_pressure_margin(
                 water_pressure_kPa, res["hydraulics"]["dp_total_max_kPa"],
                 Tw_in, res["water_out_C"], coolant,
             )
+            res["target_assessment"] = assess_chilled_water_target(res, tar)
+            target_met = res["target_assessment"]["thermal_target_met"]
 
             inp = {
-                "version": "2.5.3",
+                "version": "2.5.4",
                 "customer_name": customer_name, "contact_name": contact_name,
                 "project_name": project_name, "reference": reference,
                 "tag_description": tag_description, "coil_quantity": int(coil_quantity),
@@ -793,10 +787,26 @@ with result_tab:
             )
         st.info(f"**Thermal solver actually used:** {r.get('circuit_model','Unknown')}")
 
-        if target_met and not route_result_stale:
-            st.success("Selected coil meets the defined design target.")
-        elif not route_result_stale:
-            st.error("Selected coil does not meet the complete design target. See Design Improvement Guidance below.")
+        assessment = r.get('target_assessment', {})
+        if not route_result_stale:
+            if target_met and assessment.get('coolant_pressure_screen_passed') and assessment.get('physical_route_complete'):
+                st.success(assessment.get('status', 'Thermal target met.'))
+            elif target_met:
+                st.warning(assessment.get('status', 'Thermal target met; further checks required.'))
+            else:
+                st.error(assessment.get('status', 'Design target not met.'))
+        if assessment:
+            st.caption('Capacity: ' + ('met' if assessment['capacity_met'] else 'not met') +
+                       '; leaving-air state: ' +
+                       ('matched' if assessment['leaving_air_matched'] else
+                        ('not matched' if assessment['air_state_specified'] else 'not specified')) +
+                       '; physical circuit: ' + ('complete' if assessment['physical_route_complete'] else 'unverified') + '.')
+            if assessment['air_state_specified']:
+                st.caption(f"Leaving-air DB difference {assessment['db_error_C']:+.2f} K; humidity-ratio "
+                           f"difference {assessment['humidity_error_g_kg']:+.2f} g/kg dry air. "
+                           f"Selection matching tolerances: ±{assessment['db_tolerance_C']:.2f} K and "
+                           f"±{assessment['humidity_tolerance_g_kg']:.2f} g/kg. "
+                           'Air temperatures and humidity *limits* are also reported separately.')
 
         st.subheader("Thermal performance")
         c1, c2, c3 = st.columns(3)
@@ -1088,7 +1098,7 @@ Air is marched serially from the entering face to the leaving face. For water en
 
 ### Physical circuiting editor
 
-v2.5.3 uses the manufacturing circuit map directly in the thermal solution. A tube is identified by row and vertical position, for example `R6-T1`. A circuit is an ordered list of tube passes joined by return bends. The app checks duplicate/missing tubes, each circuit's pass count, same-end/even-pass and opposite-end/odd-pass compatibility, and long bend spans. **Equal pass counts are preferred but are not required.** A complete route activates the circuit-resolved header/friction network and the fully coupled tube-by-tube thermal solver.
+v2.5.4 uses the manufacturing circuit map directly in the thermal solution. A tube is identified by row and vertical position, for example `R6-T1`. A circuit is an ordered list of tube passes joined by return bends. The app checks duplicate/missing tubes, each circuit's pass count, same-end/even-pass and opposite-end/odd-pass compatibility, and long bend spans. **Equal pass counts are preferred but are not required.** A complete route activates the circuit-resolved header/friction network and the fully coupled tube-by-tube thermal solver.
 
 When a complete route is defined, the app switches to a fully coupled tube-by-tube / air-lane iteration. Each R#-T# cell receives the local air state from the previous row and the local coolant temperature from the previous tube in its circuit. The cell is solved as a local cross-flow wet/dry heat exchanger; both outlet states are then propagated and the whole grid is iterated to convergence. Unequal circuit lengths are allowed when every circuit retains the required even/odd outlet-end parity. The hydraulic network calculates the resulting unequal flows instead of assuming equal distribution.
 

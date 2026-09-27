@@ -6,6 +6,8 @@ from coil_core import (
 )
 from condenser_geometry import coil_geometry
 from reporting import build_pdf, build_output_pdf
+from hydraulic_margin import coolant_pressure_margin
+from target_assessment import assess_chilled_water_target
 
 
 def geometry(**kw):
@@ -59,5 +61,8 @@ def test_flat_serpentine_thermal_march_and_both_pdf_reports():
          'air_in_DB_C':27.,'air_in_RH_pct':50.,'coolant':'Water',
          'glycol_pct':0.,'water_in_C':7.,'water_pressure_kPa_abs':300,
          'water_mdot_kg_s':.22,'water_volume_m3_h':.8,'circuits':2}
+    r['pressure_margin']=coolant_pressure_margin(300,r['hydraulics']['dp_total_max_kPa'],7,r['water_out_C'])
+    r['circuit_model']='Equivalent row-bank model'
+    r['target_assessment']=assess_chilled_water_target(r,{'Q_required_kW':r['Q_total_kW']*.9,'target_air':None})
     assert build_output_pdf(inp,r,None,'test').startswith(b'%PDF-')
     assert build_pdf(inp,r,None,[], 'test').startswith(b'%PDF-')
