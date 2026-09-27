@@ -245,6 +245,13 @@ def build_output_pdf(inputs: dict, result: dict, target: dict | None, username: 
         ["Supply header velocity", f"{float(hyd.get('header_supply_velocity_m_s',0)):.3f} m/s"],
         ["Return header velocity", f"{float(hyd.get('header_return_velocity_m_s',0)):.3f} m/s"],
     ]
+    if result.get("pressure_margin"):
+        margin = result["pressure_margin"]
+        fluid_rows += [
+            ["Least favorable outlet pressure", f"{margin['minimum_outlet_kPa_abs']:.2f} kPa abs"],
+            ["Margin over water vapor reference", f"{margin['margin_over_water_vapor_kPa']:.2f} kPa"],
+            ["Pressure screen basis", margin["basis"]],
+        ]
     story += [Paragraph("Fluid Data", styles["BasicH2"]), basic_table(fluid_rows)]
 
     if target:
@@ -281,7 +288,7 @@ def build_pdf(inputs: dict, result: dict, target: dict | None, warnings: list[st
         leftMargin=15 * mm,
         topMargin=15 * mm,
         bottomMargin=15 * mm,
-        title="Chilled Water Cooling Coil Detailed Engineering Report v2.5.2",
+        title="Chilled Water Cooling Coil Detailed Engineering Report v2.5.3",
     )
 
     pframe = Frame(15 * mm, 15 * mm, psize[0] - 30 * mm, psize[1] - 30 * mm, id="portrait_frame")
@@ -290,7 +297,7 @@ def build_pdf(inputs: dict, result: dict, target: dict | None, warnings: list[st
     def footer(canvas, d):
         canvas.saveState()
         canvas.setFont("Helvetica", 7)
-        canvas.drawString(15 * mm, 7 * mm, "Chilled Water Cooling Coil Designer v2.5.2")
+        canvas.drawString(15 * mm, 7 * mm, "Chilled Water Cooling Coil Designer v2.5.3")
         canvas.drawRightString(canvas._pagesize[0] - 15 * mm, 7 * mm, f"Page {d.page}")
         canvas.restoreState()
 
@@ -306,7 +313,7 @@ def build_pdf(inputs: dict, result: dict, target: dict | None, warnings: list[st
     styles.add(ParagraphStyle(name="Tiny", parent=styles["BodyText"], fontSize=7, leading=8.5, spaceAfter=2))
 
     story = [
-        Paragraph("Chilled Water Cooling Coil Detailed Engineering Report - v2.5.2", styles["TitleC"]),
+        Paragraph("Chilled Water Cooling Coil Detailed Engineering Report - v2.5.3", styles["TitleC"]),
         Paragraph(f"Prepared by user: {_safe(username)}", styles["Smallx"]),
         Paragraph(
             "Physical flow geometry: CROSS-FLOW (air perpendicular to tube/coolant direction). "
@@ -374,6 +381,13 @@ def build_pdf(inputs: dict, result: dict, target: dict | None, warnings: list[st
         ["Water dP avg", f"{result['hydraulics']['dp_total_avg_kPa']:.2f} kPa"],
         ["Water dP min / max", f"{result['hydraulics']['dp_total_min_kPa']:.2f} / {result['hydraulics']['dp_total_max_kPa']:.2f} kPa"],
     ]
+    if result.get("pressure_margin"):
+        margin = result["pressure_margin"]
+        perf_rows += [
+            ["Least favorable coolant outlet pressure", f"{margin['minimum_outlet_kPa_abs']:.2f} kPa abs"],
+            ["Static margin over water vapor reference", f"{margin['margin_over_water_vapor_kPa']:.2f} kPa"],
+            ["Pressure screen basis", margin["basis"]],
+        ]
     if target:
         perf_rows.append(["Target mode", target.get("target_mode", inputs.get("target_mode", ""))])
         perf_rows.append(["Target capacity", f"{target.get('Q_required_kW', 0):.2f} kW"])
@@ -590,7 +604,7 @@ def build_pdf(inputs: dict, result: dict, target: dict | None, warnings: list[st
         story.append(_table(d2,[9*mm,9*mm,17*mm,14*mm,14*mm,13*mm,14*mm,12*mm,14*mm,13*mm,13*mm,13*mm],font=5.5,repeat=1))
         story.append(Spacer(1, 4))
         story.append(Paragraph(
-            "Model assumption: equal entering dry-air mass flow per vertical tube lane. Lateral air redistribution and cross-fin conduction between adjacent tubes are not included in v2.5.2.",
+            "Model assumption: equal entering dry-air mass flow per vertical tube lane. Lateral air redistribution and cross-fin conduction between adjacent tubes are not included in v2.5.3.",
             styles["Tiny"],
         ))
 

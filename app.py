@@ -9,7 +9,7 @@ import pandas as pd
 import streamlit as st
 
 st.set_page_config(
-    page_title="Chilled Water Cooling Coil Designer v2.5.2",
+    page_title="Chilled Water Cooling Coil Designer v2.5.3",
     page_icon="💧",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -30,6 +30,7 @@ from coil_core import (
     warnings_for_result,
 )
 from reporting import build_pdf, build_output_pdf
+from hydraulic_margin import coolant_pressure_margin
 from tube2d import coupled_tube_by_tube_performance
 from circuiting import (
     auto_serpentine_routes,
@@ -63,10 +64,10 @@ with st.sidebar:
     if st.button("Logout", use_container_width=True):
         logout()
     st.divider()
-    st.caption("Engineering model v2.5.2 - fully coupled tube-by-tube thermal + physical circuiting")
+    st.caption("Engineering model v2.5.3 - fully coupled tube-by-tube thermal + physical circuiting")
     st.caption("Air crosses the tube axes; water connection side only changes row progression.")
 
-st.title("💧 Chilled Water Cooling Coil Designer v2.5.2")
+st.title("💧 Chilled Water Cooling Coil Designer v2.5.3")
 st.caption(
     "Wet/dry cooling - row-by-row air and coolant temperatures - air/water dP - "
     "target checking - multi-user Streamlit"
@@ -496,8 +497,13 @@ with input_tab:
                     and res["air_out"]["W"] <= float(targ_air.get("W", res["air_out"]["W"])) + 1e-5
                 )
 
+            res["pressure_margin"] = coolant_pressure_margin(
+                water_pressure_kPa, res["hydraulics"]["dp_total_max_kPa"],
+                Tw_in, res["water_out_C"], coolant,
+            )
+
             inp = {
-                "version": "2.5.2",
+                "version": "2.5.3",
                 "customer_name": customer_name, "contact_name": contact_name,
                 "project_name": project_name, "reference": reference,
                 "tag_description": tag_description, "coil_quantity": int(coil_quantity),
@@ -810,6 +816,16 @@ with result_tab:
         c1.metric("Air dP", f"{r['air_dp_Pa']:.1f} Pa")
         c2.metric("Water dP average", f"{r['hydraulics']['dp_total_avg_kPa']:.2f} kPa")
         c3.metric("Water dP min / max", f"{r['hydraulics']['dp_total_min_kPa']:.1f} / {r['hydraulics']['dp_total_max_kPa']:.1f} kPa")
+        margin = r.get("pressure_margin", {})
+        if margin:
+            st.subheader("Coolant pressure availability")
+            a, b, c = st.columns(3)
+            a.metric("Supply pressure", f"{margin['supply_kPa_abs']:.1f} kPa abs")
+            b.metric("Least favorable outlet", f"{margin['minimum_outlet_kPa_abs']:.1f} kPa abs")
+            c.metric("Margin above water vapor reference", f"{margin['margin_over_water_vapor_kPa']:.1f} kPa")
+            st.caption(margin['basis'] + " Static lift and other plant losses are outside this coil calculation.")
+            if margin['margin_over_water_vapor_kPa'] <= 0:
+                st.error("Supply pressure is insufficient for single-phase operation at this calculated circuit pressure loss.")
         st.info(
             f"**Surface state:** {r['surface_mode']}  |  "
             f"**Physical geometry:** CROSS-FLOW  |  **Water row progression:** {r['water_row_progression']}"
@@ -943,6 +959,8 @@ with result_tab:
         st.subheader("Design Improvement Guidance")
         rs = r["resistance_split_pct"]
         guidance = []
+        if margin and margin['margin_over_water_vapor_kPa'] <= 0:
+            guidance.append("Increase coil supply pressure or reduce circuit and header losses; confirm pump suction and plant elevation effects.")
         if not target_met:
             if rs["air"] >= 60.0:
                 if r["face_velocity_m_s"] > 2.5 or r["air_dp_Pa"] > 180.0:
@@ -1070,7 +1088,7 @@ Air is marched serially from the entering face to the leaving face. For water en
 
 ### Physical circuiting editor
 
-v2.5.2 uses the manufacturing circuit map directly in the thermal solution. A tube is identified by row and vertical position, for example `R6-T1`. A circuit is an ordered list of tube passes joined by return bends. The app checks duplicate/missing tubes, each circuit's pass count, same-end/even-pass and opposite-end/odd-pass compatibility, and long bend spans. **Equal pass counts are preferred but are not required.** A complete route activates the circuit-resolved header/friction network and the fully coupled tube-by-tube thermal solver.
+v2.5.3 uses the manufacturing circuit map directly in the thermal solution. A tube is identified by row and vertical position, for example `R6-T1`. A circuit is an ordered list of tube passes joined by return bends. The app checks duplicate/missing tubes, each circuit's pass count, same-end/even-pass and opposite-end/odd-pass compatibility, and long bend spans. **Equal pass counts are preferred but are not required.** A complete route activates the circuit-resolved header/friction network and the fully coupled tube-by-tube thermal solver.
 
 When a complete route is defined, the app switches to a fully coupled tube-by-tube / air-lane iteration. Each R#-T# cell receives the local air state from the previous row and the local coolant temperature from the previous tube in its circuit. The cell is solved as a local cross-flow wet/dry heat exchanger; both outlet states are then propagated and the whole grid is iterated to convergence. Unequal circuit lengths are allowed when every circuit retains the required even/odd outlet-end parity. The hydraulic network calculates the resulting unequal flows instead of assuming equal distribution.
 
